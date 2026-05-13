@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# runtime data (sqlite + uploads)
+/data/screenshotmaker.db
+/data/screenshotmaker.db-journal
+/data/uploads/

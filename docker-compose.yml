@@ -1,0 +1,13 @@
+services:
+  screenshotmaker:
+    build: .
+    image: screenshotmaker:latest
+    container_name: screenshotmaker
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+    environment:
+      - DATABASE_URL=file:/data/screenshotmaker.db
+      - UPLOAD_DIR=/data/uploads
