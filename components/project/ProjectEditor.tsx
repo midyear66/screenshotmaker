@@ -24,15 +24,13 @@ export type ProjectPayload = {
     name: string;
     slotCount: number;
     config: string;
-    slots: { id: string; order: number; headline: string; subhead: string | null; config: string }[];
+    slots: { id: string; order: number; config: string }[];
   };
   screens: { id: string; slotOrder: number; screenshotPath: string }[];
 };
 
 type SlotView = {
   order: number;
-  headline: string;
-  subhead: string | null;
   config: SlotConfig;
   screen?: { id: string; screenshotPath: string };
 };
@@ -45,8 +43,6 @@ export function ProjectEditor({ project }: { project: ProjectPayload }) {
     const screen = project.screens.find((sc) => sc.slotOrder === s.order);
     return {
       order: s.order,
-      headline: s.headline,
-      subhead: s.subhead,
       config: parseSlotConfig(s.config),
       screen,
     };
@@ -267,19 +263,10 @@ function SlotCard({
         slot={slot.config}
         slotNumber={slot.order}
         totalSlots={totalSlots}
-        headline={slot.headline}
-        subhead={slot.subhead}
         screenshotUrl={screenshotUrl}
         readOnly
         maxWidthClass="max-w-full"
       />
-
-      <div className="text-xs">
-        <div className="font-medium truncate">{slot.headline}</div>
-        {slot.subhead && (
-          <div className="text-zinc-500 truncate">{slot.subhead}</div>
-        )}
-      </div>
 
       <button
         onClick={onReplace}

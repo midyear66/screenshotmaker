@@ -35,8 +35,6 @@ export function ExportButton({
           const screen = project.screens.find((sc) => sc.slotOrder === s.order);
           return {
             order: s.order,
-            headline: s.headline,
-            subhead: s.subhead,
             config: parseSlotConfig(s.config) as SlotConfig,
             screenshotUrl: screen ? `/api/uploads/${screen.screenshotPath}` : null,
           };
@@ -56,8 +54,6 @@ export function ExportButton({
             slot: slot.config,
             slotNumber: slot.order,
             totalSlots: slots.length,
-            headline: slot.headline,
-            subhead: slot.subhead,
             screenshotUrl: slot.screenshotUrl,
             device,
           });

@@ -40,8 +40,6 @@ export default async function TemplatePage({
           slots: template.slots.map((s) => ({
             id: s.id,
             order: s.order,
-            headline: s.headline,
-            subhead: s.subhead,
             config: s.config,
           })),
         }}

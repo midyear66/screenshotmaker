@@ -11,14 +11,16 @@ Build a template once (background, headline copy, device frame, text positions, 
 1. **Templates** define the visual recipe for an app's screenshot set:
    - Configurable number of slots (one per screenshot in the final set; up to 10)
    - Filmstrip view — see every slot at once while editing
-   - Per-slot headline + subheadline copy
+   - **Free-form text + icon elements** per slot (paint-program style): create / delete / move / rotate any number of text boxes and icons; resize via corner handles, rotate via the top handle, double-click text to edit in place
+   - **Text:** per-element font picker (~20 system families), bold + italic toggles, weight 400–800, color, alignment, rotation; box width auto-fits the typed content
+   - **Icons:** 12 built-in monoline icons + upload your own SVG files (per template) — colour, size, rotation, all work uniformly
    - Background color **or** uploaded background image with two modes:
      - **Single** — same image on every slot, per-slot pan / zoom / blur / brightness
      - **Panorama** — image is split into N equal vertical bands so the slots side-by-side form one continuous backdrop; template-wide zoom / blur / brightness keep the panorama seamless
    - Bezel color picker (black / graphite / grey / silver / custom) — side ribbon shade auto-derived
+   - **Bezel corner radius** slider (0–200 px) for sharp-rectangle to pill-shaped device frames
    - Device tilt around **both** X and Y axes (real pseudo-3D perspective with visible side edges), plus Z-axis spin
    - Device scale / position, all coordinates normalized 0–1 so layouts scale to multiple device sizes at export
-   - Headline/subhead font sizes, colors, positions
 
 2. **Projects** apply a template to a set of screenshots:
    - Drag-and-drop multi-file upload (auto-maps to slots in upload order)
@@ -123,9 +125,9 @@ model Slot {
   id         String
   templateId String
   order      Int               // 1-based, unique per template
-  headline   String
-  subhead    String?
-  config     String            // JSON: SlotConfig
+  headline   String            // legacy; no longer read by the editor
+  subhead    String?           // legacy; no longer read by the editor
+  config     String            // JSON: SlotConfig (incl. elements[])
 }
 
 model Project {
@@ -148,23 +150,19 @@ model Screen {
 ```ts
 TemplateConfig = {
   backgroundColor: string;
-  fontFamily: string;
-  bezelColor: string;                  // hex; side ribbon = scaleColor(bezelColor, 0.6)
-  bgImagePath?: string;                // relative to UPLOAD_DIR; timestamped per upload
+  fontFamily: string;                   // template-wide default; per-element fontFamily can override
+  bezelColor: string;                   // hex; side ribbon = scaleColor(bezelColor, 0.6)
+  bezelCornerRadius: number;            // 0..200 px on 1290-wide canvas
+  bgImagePath?: string;                 // relative to UPLOAD_DIR; timestamped per upload
   bgImageMode: "single" | "panorama";
-  bgImagePanoZoom: number;             // 1..3, only used in panorama mode
-  bgImagePanoBlur: number;             // 0..60 px, panorama mode
-  bgImagePanoBrightness: number;       // 0..1.5 multiplier, panorama mode
+  bgImagePanoZoom: number;              // 1..3, panorama mode
+  bgImagePanoBlur: number;              // 0..60 px, panorama mode
+  bgImagePanoBrightness: number;        // 0..1.5 multiplier, panorama mode
+  customIcons: { id, name, path }[];    // user-uploaded SVG icons (path under UPLOAD_DIR)
 }
 
 SlotConfig = {
-  headlinePos: { x: 0..1, y: 0..1 };   // normalized over 1290×2796
-  headlineSize: number;                 // px in base 1290-wide space
-  headlineColor: string;
-  subheadPos: { x: 0..1, y: 0..1 };
-  subheadSize: number;
-  subheadColor: string;
-  devicePos: { x: 0..1, y: 0..1 };      // centre of device
+  devicePos: { x: 0..1, y: 0..1 };
   deviceScale: number;
   deviceRotation: number;               // Z-axis spin, degrees
   deviceTiltX: number;                  // rotation around device's X axis (top tilt)
@@ -174,10 +172,36 @@ SlotConfig = {
   bgImageZoom: number;                  // 1..3
   bgImageBlur: number;                  // px in 1290-wide canvas space
   bgImageBrightness: number;            // 0..1.5 multiplier
+  elements: SlotElement[];              // ordered text + icon overlay
 }
+
+SlotElement =
+  | TextElement {
+      type: "text";
+      id: string;
+      pos: { x, y };                    // normalized centre
+      width: number;                    // auto-fit to text content
+      align: "left" | "center" | "right";
+      text: string;
+      fontSize: number;                 // px in 1290-wide canvas space
+      fontFamily?: string;              // optional per-element override
+      weight: 400..800;
+      italic: boolean;
+      color: string;
+      rotation: number;                 // degrees, around centre
+    }
+  | IconElement {
+      type: "icon";
+      id: string;
+      pos: { x, y };
+      size: number;                     // longest-edge px
+      icon: string;                     // built-in key OR `custom:<path>` for uploaded SVG
+      color: string;                    // applies to built-in icons; SVG uploads keep own colours
+      rotation: number;
+    };
 ```
 
-`parseSlotConfig` merges parsed JSON over `DEFAULT_SLOT_CONFIG`, so existing slots without the new fields auto-migrate to defaults at read time. There's a one-time rename migration from the old `deviceTiltX` (which was actually around the Y axis) to the new `deviceTiltY`.
+`parseSlotConfig` merges parsed JSON over `DEFAULT_SLOT_CONFIG`, so existing slots without new fields auto-migrate to defaults at read time. Historic configs that used `deviceTiltX` for what's now `deviceTiltY` are also fixed up in the parser. Slots that pre-date the elements refactor open with an empty `elements` array (clean break — re-add text/icons from the inspector).
 
 ---
 
@@ -223,13 +247,15 @@ The container runs `prisma migrate deploy` on startup, then `node server.js` fro
 
 ```
 ./data/
-├── screenshotmaker.db        # SQLite (back this up to back up everything)
+├── screenshotmaker.db                       # SQLite (back this up to back up everything)
 ├── screenshotmaker.db-journal
 └── uploads/
     ├── templates/
-    │   └── <templateId>/bg.<ext>   # template-level background image
+    │   └── <templateId>/
+    │       ├── bg-<epoch>.<ext>             # template-level background image
+    │       └── icons/<iconId>.svg           # user-uploaded SVG icons
     └── <projectId>/
-        └── <screenId>.png          # per-slot screenshot
+        └── <screenId>.png                   # per-slot screenshot
 ```
 
 To back up: stop the container, copy `./data/`. To wipe: delete the directory and restart.
@@ -287,9 +313,12 @@ Sanity checks after move:
 1. **Create a template:** name + slot count → opens the editor.
 2. **In the template editor:**
    - The **filmstrip** at the top shows every slot live; click any thumbnail to make it the active full-size canvas.
-   - Edit headline/subhead per slot; drag text/device on the canvas; tune device tilt (X axis = top/bottom edge, Y axis = side edge), rotation (Z-axis spin), and scale.
-   - Pick a **bezel color** preset or custom hue.
-   - Upload a **background image** to the template; per-slot sliders control pan / zoom / blur / brightness.
+   - **Add text or icons** to the active slot with `+ Add text` / `+ Add icon`. Each element is independently draggable, rotatable (top handle), and resizable (corner handles). **Double-click text** to edit in place — the textarea matches the rendered font/size/rotation.
+   - Per-text-element: font picker (~20 system families), Bold / Italic toggles, weight 400–800, colour, align, rotation slider. Width auto-fits to typed content.
+   - Per-icon-element: pick from 12 built-ins, or **upload your own SVG** files (per template); set size, colour (built-ins), rotation.
+   - Tune device tilt (X axis = top/bottom edge, Y axis = side edge), rotation (Z-axis spin), and scale.
+   - Pick a **bezel colour** preset / custom hue and a **bezel corner radius** (0 = sharp, 200 = pill).
+   - Upload a **background image** to the template; per-slot sliders control pan / zoom / blur / brightness in single mode (template-wide sliders in panorama mode).
    - Changes autosave every 600ms.
 3. **Create a project** using that template.
 4. **Drop screenshots** into the drop zone. They fill empty slots in upload order.
@@ -301,11 +330,13 @@ Sanity checks after move:
 ## Known limits / trade-offs
 
 - **iPad layout is naive.** Normalized coords are referenced to the iPhone 6.7 aspect (≈0.46). The iPad 13" canvas (≈0.75) renders the same layout, leaving large empty bands. Tweak each slot's device/text positions with iPad in mind, or skip iPad for now.
-- **Stylized device frame**, not real Apple bezel PNGs. The pseudo-3D prism + rounded-corner ribbon reads as a phone but isn't pixel-accurate to any specific model. Notch is always black regardless of bezel color (matches real iPhones).
-- **Geist font** is whatever the browser provides at canvas render time. The Next.js Geist webfont isn't injected into the Konva canvas; for exact font rendering, add `@font-face` to a global stylesheet and `await document.fonts.ready` before exporting.
+- **Stylized device frame**, not real Apple bezel PNGs. The pseudo-3D prism + rounded-corner ribbon reads as a phone but isn't pixel-accurate to any specific model. Notch is always black regardless of bezel colour (matches real iPhones).
+- **Fonts are OS-resolved system fonts.** The font picker lists ~20 cross-platform families; rendering depends on what the browser/container has installed. Custom font upload + web fonts (Google Fonts) aren't wired up yet.
+- **Custom SVG icons keep their own colours.** Multi-colour SVGs don't recolour from the inspector; the colour picker is a no-op for uploaded icons (built-in icons recolour as before).
 - **No undo/redo** in the editor — changes are autosaved live.
 - **No auth.** Anyone with network access to the port can use the app. Intended for LAN / Tailscale. Add basic auth middleware if exposing publicly.
 - **Perspective tilt is rounded-rect prism, not true 3D.** Looks correct for typical hero-shot angles (≤30°); extreme angles will show projection artefacts.
+- **Legacy `Slot.headline` / `Slot.subhead` columns** still exist in the DB schema but are no longer read or written — kept to avoid a Prisma migration. Safe to drop in a future schema cleanup.
 
 ---
 
@@ -320,6 +351,8 @@ Built incrementally:
 5. **Filmstrip + perspective tilt + image backgrounds** — all-slots-at-once view, real Y-axis perspective tilt (custom quad warp + canvas triangle subdivision), template-level bg image upload with per-slot pan/zoom/blur/brightness.
 6. **3D edges + dual-axis tilt + bezel colors** — device modelled as a rounded-rect prism with visible side ribbon that wraps around rounded corners; both X and Y tilt axes; bezel color picker with auto-derived side shade.
 7. **Panorama backgrounds** — second bg mode that splits the source image into N equal vertical bands so the slots side-by-side form one continuous backdrop; template-wide zoom/blur/brightness sliders keep the panorama seamless; uploads timestamped to defeat HTTP + React caches.
+8. **Free-form elements + paint-program direct manipulation** — replaced the fixed headline/subhead pair with an unbounded `elements: SlotElement[]` array of text boxes and icons. Konva `Transformer` gives every selected element corner-resize + rotate handles; double-click text opens an in-place HTML overlay editor matching the rendered font / size / rotation. Text boxes auto-fit their typed content (no manual wrap-width). Per-element font picker (~20 system fonts), Bold + Italic toggles, weight, colour, align, rotation.
+9. **Custom SVG icons + bezel corner radius** — upload your own SVG files per template (stored under `data/uploads/templates/<id>/icons/`), pick them from the same icon picker grid; new `TemplateConfig.bezelCornerRadius` slider (0–200 px) lets the device frame range from sharp rectangle to pill shape.
 
 ---
 

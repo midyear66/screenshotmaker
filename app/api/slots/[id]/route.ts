@@ -7,9 +7,9 @@ export async function PATCH(
 ) {
   const { id } = await params;
   const body = await req.json();
-  const data: { headline?: string; subhead?: string | null; config?: string } = {};
-  if (typeof body.headline === "string") data.headline = body.headline;
-  if (typeof body.subhead === "string" || body.subhead === null) data.subhead = body.subhead;
+  // Headline/subhead are no longer surface-area — everything lives inside
+  // config.elements now. We only persist `config` here.
+  const data: { config?: string } = {};
   if (body.config !== undefined) data.config = JSON.stringify(body.config);
   const slot = await prisma.slot.update({ where: { id }, data });
   return NextResponse.json(slot);

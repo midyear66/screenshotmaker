@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { DEFAULT_SLOT_CONFIG, defaultHeadlineElement } from "@/lib/editor-types";
 
 export async function POST(
   _req: Request,
@@ -14,6 +15,13 @@ export async function POST(
 
   const nextOrder = (template.slots[0]?.order ?? 0) + 1;
 
+  // New slots start with a single headline-style text element so the canvas
+  // isn't empty. Users can add/remove/customise from there.
+  const initialConfig = {
+    ...DEFAULT_SLOT_CONFIG,
+    elements: [defaultHeadlineElement(`Slot ${nextOrder}`)],
+  };
+
   const [, slot] = await prisma.$transaction([
     prisma.template.update({
       where: { id },
@@ -23,7 +31,9 @@ export async function POST(
       data: {
         templateId: id,
         order: nextOrder,
-        headline: `Slot ${nextOrder}`,
+        // headline column kept in DB schema for now but no longer used by the editor.
+        headline: "",
+        config: JSON.stringify(initialConfig),
       },
     }),
   ]);

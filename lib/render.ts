@@ -5,6 +5,8 @@ import {
   CANVAS_WIDTH,
   SlotConfig,
   TemplateConfig,
+  isCustomIcon,
+  customIconPath,
 } from "@/lib/editor-types";
 import { renderBackgroundCanvas } from "@/lib/background";
 import {
@@ -15,6 +17,7 @@ import {
 } from "@/lib/deviceFrame";
 import { computeTiltedDevice, renderTiltedDevice } from "@/lib/perspective";
 import { scaleColor } from "@/lib/color";
+import { ICON_VIEWBOX_SIZE, ICONS } from "@/lib/icons";
 
 export type DeviceSize = {
   key: string;
@@ -58,15 +61,12 @@ export async function renderSlotToBlob(args: {
   slot: SlotConfig;
   slotNumber: number;
   totalSlots: number;
-  headline: string;
-  subhead: string | null;
   screenshotUrl: string | null;
   device: DeviceSize;
 }): Promise<Blob> {
-  const { template, slot, slotNumber, totalSlots, headline, subhead, screenshotUrl, device } = args;
+  const { template, slot, slotNumber, totalSlots, screenshotUrl, device } = args;
 
   const xScale = device.width / CANVAS_WIDTH;
-  const TEXT_BLOCK_WIDTH = CANVAS_WIDTH * 0.9 * xScale;
 
   const container = document.createElement("div");
   container.style.position = "absolute";
@@ -126,6 +126,7 @@ export async function renderSlotToBlob(args: {
       screenshot: screenshotImg,
       slotNumber,
       bezelColor: template.bezelColor,
+      cornerRadius: template.bezelCornerRadius,
     });
     let warpedCanvas: HTMLCanvasElement = flat;
     let warpedW = flat.width;
@@ -134,19 +135,19 @@ export async function renderSlotToBlob(args: {
     let pivotY = flat.height / 2;
     if (Math.abs(slot.deviceTiltX) >= 0.5 || Math.abs(slot.deviceTiltY) >= 0.5) {
       const sideFill = scaleColor(template.bezelColor, 0.6);
-      const device = computeTiltedDevice(
+      const tilted = computeTiltedDevice(
         BEZEL_W,
         BEZEL_H,
-        CORNER_RADIUS,
+        template.bezelCornerRadius ?? CORNER_RADIUS,
         slot.deviceTiltX,
         slot.deviceTiltY,
         { sideFill }
       );
-      warpedCanvas = renderTiltedDevice(flat, device, { subdivisions: 60 });
-      warpedW = device.width;
-      warpedH = device.height;
-      pivotX = device.pivot.x;
-      pivotY = device.pivot.y;
+      warpedCanvas = renderTiltedDevice(flat, tilted, { subdivisions: 60 });
+      warpedW = tilted.width;
+      warpedH = tilted.height;
+      pivotX = tilted.pivot.x;
+      pivotY = tilted.pivot.y;
     }
 
     layer.add(
@@ -168,37 +169,76 @@ export async function renderSlotToBlob(args: {
       })
     );
 
-    // ---- Headline ----
-    const headlineFontPx = slot.headlineSize * xScale;
-    layer.add(
-      new Konva.Text({
-        x: slot.headlinePos.x * device.width - TEXT_BLOCK_WIDTH / 2,
-        y: slot.headlinePos.y * device.height,
-        width: TEXT_BLOCK_WIDTH,
-        align: "center",
-        text: headline,
-        fontSize: headlineFontPx,
-        fontFamily: template.fontFamily,
-        fontStyle: "700",
-        fill: slot.headlineColor,
-      })
-    );
-
-    if (subhead) {
-      const subheadFontPx = slot.subheadSize * xScale;
-      layer.add(
-        new Konva.Text({
-          x: slot.subheadPos.x * device.width - TEXT_BLOCK_WIDTH / 2,
-          y: slot.subheadPos.y * device.height,
-          width: TEXT_BLOCK_WIDTH,
-          align: "center",
-          text: subhead,
-          fontSize: subheadFontPx,
-          fontFamily: template.fontFamily,
-          fontStyle: "500",
-          fill: slot.subheadColor,
-        })
-      );
+    // ---- Slot elements (text + icons), in array order. ----
+    for (const el of slot.elements) {
+      if (el.type === "text") {
+        const blockW = el.width * CANVAS_WIDTH * xScale;
+        const fontPx = el.fontSize * xScale;
+        layer.add(
+          new Konva.Text({
+            x: el.pos.x * device.width,
+            y: el.pos.y * device.height,
+            width: blockW,
+            offsetX: blockW / 2,
+            offsetY: fontPx * 0.6,
+            rotation: el.rotation,
+            align: el.align,
+            text: el.text,
+            fontSize: fontPx,
+            fontFamily: el.fontFamily ?? template.fontFamily,
+            fontStyle: `${el.italic ? "italic " : ""}${el.weight}`,
+            fill: el.color,
+          })
+        );
+      } else if (isCustomIcon(el.icon)) {
+        // User-uploaded SVG — load as an Image, preserve aspect ratio.
+        const url = `/api/uploads/${customIconPath(el.icon)}`;
+        const img = await loadImage(url).catch(() => null);
+        if (!img || img.width === 0 || img.height === 0) continue;
+        const longest = el.size * xScale;
+        let w: number;
+        let h: number;
+        if (img.width >= img.height) {
+          w = longest;
+          h = longest * (img.height / img.width);
+        } else {
+          h = longest;
+          w = longest * (img.width / img.height);
+        }
+        layer.add(
+          new Konva.Image({
+            image: img,
+            x: el.pos.x * device.width,
+            y: el.pos.y * device.height,
+            width: w,
+            height: h,
+            offsetX: w / 2,
+            offsetY: h / 2,
+            rotation: el.rotation,
+          })
+        );
+      } else {
+        const def = ICONS[el.icon];
+        if (!def) continue;
+        const iconScale = (el.size * xScale) / ICON_VIEWBOX_SIZE;
+        layer.add(
+          new Konva.Path({
+            x: el.pos.x * device.width,
+            y: el.pos.y * device.height,
+            data: def.path,
+            fill: def.stroke ? undefined : el.color,
+            stroke: def.stroke ? el.color : undefined,
+            strokeWidth: def.stroke ? 2 : 0,
+            lineCap: "round",
+            lineJoin: "round",
+            scaleX: iconScale,
+            scaleY: iconScale,
+            offsetX: ICON_VIEWBOX_SIZE / 2,
+            offsetY: ICON_VIEWBOX_SIZE / 2,
+            rotation: el.rotation,
+          })
+        );
+      }
     }
 
     layer.draw();

@@ -4,9 +4,9 @@
 
 export const BEZEL_W = 920;
 export const BEZEL_H = 1900;
+/** Default bezel corner radius. Templates may override via TemplateConfig.bezelCornerRadius. */
 export const CORNER_RADIUS = 90;
 const SCREEN_PAD = 20;
-const INNER_RADIUS = CORNER_RADIUS - SCREEN_PAD;
 
 function roundedRectPath(
   ctx: CanvasRenderingContext2D,
@@ -16,16 +16,18 @@ function roundedRectPath(
   h: number,
   r: number
 ) {
+  // Clamp r so we don't blow up the path on very small dimensions.
+  const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2));
   ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
   ctx.closePath();
 }
 
@@ -33,8 +35,12 @@ export function renderFlatDeviceFrame(args: {
   screenshot?: HTMLImageElement | null;
   slotNumber?: number;
   bezelColor?: string;
+  /** Override the default bezel corner radius. */
+  cornerRadius?: number;
 }): HTMLCanvasElement {
   const bezelColor = args.bezelColor ?? "#1f1f1f";
+  const outerR = Math.max(0, args.cornerRadius ?? CORNER_RADIUS);
+  const innerR = Math.max(0, outerR - SCREEN_PAD);
 
   const canvas = document.createElement("canvas");
   canvas.width = BEZEL_W;
@@ -44,7 +50,7 @@ export function renderFlatDeviceFrame(args: {
 
   // Outer bezel
   ctx.fillStyle = bezelColor;
-  roundedRectPath(ctx, 0, 0, BEZEL_W, BEZEL_H, CORNER_RADIUS);
+  roundedRectPath(ctx, 0, 0, BEZEL_W, BEZEL_H, outerR);
   ctx.fill();
 
   // Inner screen background (placeholder gray under everything)
@@ -53,12 +59,12 @@ export function renderFlatDeviceFrame(args: {
   const innerW = BEZEL_W - SCREEN_PAD * 2;
   const innerH = BEZEL_H - SCREEN_PAD * 2;
   ctx.fillStyle = "#e5e7eb";
-  roundedRectPath(ctx, innerX, innerY, innerW, innerH, INNER_RADIUS);
+  roundedRectPath(ctx, innerX, innerY, innerW, innerH, innerR);
   ctx.fill();
 
   if (args.screenshot) {
     ctx.save();
-    roundedRectPath(ctx, innerX, innerY, innerW, innerH, INNER_RADIUS);
+    roundedRectPath(ctx, innerX, innerY, innerW, innerH, innerR);
     ctx.clip();
     ctx.drawImage(args.screenshot, innerX, innerY, innerW, innerH);
     ctx.restore();

@@ -5,6 +5,17 @@
 export const CANVAS_WIDTH = 1290;
 export const CANVAS_HEIGHT = 2796;
 
+/**
+ * A user-uploaded SVG icon attached to a template. The `path` is relative
+ * to UPLOAD_DIR (typically `templates/<templateId>/icons/<iconId>.svg`).
+ */
+export type CustomIcon = {
+  id: string;
+  /** Display name (defaults to the uploaded file name). */
+  name: string;
+  path: string;
+};
+
 export type TemplateConfig = {
   backgroundColor: string;
   fontFamily: string;
@@ -17,36 +28,86 @@ export type TemplateConfig = {
    *              still apply.
    */
   bgImageMode: "single" | "panorama";
-  /** In panorama mode, zoom into a centered portion of the source image
-   *  (1 = full image, 2 = middle 50%, 3 = middle 33%) so the whole panorama
-   *  zooms together and adjacent slot bands stay continuous. */
   bgImagePanoZoom: number;
-  /** Panorama-wide blur (px in 1290-wide canvas space). Applied to every
-   *  slot so the panorama looks continuous; per-slot blur is ignored in
-   *  panorama mode. */
   bgImagePanoBlur: number;
-  /** Panorama-wide brightness multiplier (0..1.5). Same logic as blur. */
   bgImagePanoBrightness: number;
   bezelColor: string; // hex; sides are auto-derived as a darker shade
+  /** Device bezel corner radius in 1290-wide canvas px (0..200). Default 90 ≈ iPhone. */
+  bezelCornerRadius: number;
+  /** User-uploaded SVG icons available to this template's slots. */
+  customIcons: CustomIcon[];
 };
 
+/**
+ * Custom icon sentinel: `IconElement.icon` values starting with this prefix
+ * refer to an uploaded SVG; the remainder is the file's path under UPLOAD_DIR.
+ */
+export const CUSTOM_ICON_PREFIX = "custom:";
+
+export function isCustomIcon(iconValue: string): boolean {
+  return iconValue.startsWith(CUSTOM_ICON_PREFIX);
+}
+
+export function customIconPath(iconValue: string): string {
+  return iconValue.slice(CUSTOM_ICON_PREFIX.length);
+}
+
+export type TextElement = {
+  type: "text";
+  id: string;
+  /** Centre of the text block, normalized 0..1. */
+  pos: { x: number; y: number };
+  /**
+   * Block width as a fraction of canvas width. Auto-maintained to hug the
+   * rendered text content; updated whenever text / font / size / weight
+   * changes. Used as the Konva.Text width for centre alignment of
+   * multi-line content.
+   */
+  width: number;
+  align: "left" | "center" | "right";
+  text: string;
+  /** Px in the 1290-wide canvas space (scaled at export per device). */
+  fontSize: number;
+  /** Optional per-element font family override. Falls back to template font. */
+  fontFamily?: string;
+  /** 400 / 500 / 600 / 700 / 800. */
+  weight: number;
+  italic: boolean;
+  color: string;
+  /** Degrees, rotated around the text block's centre. */
+  rotation: number;
+};
+
+export type IconElement = {
+  type: "icon";
+  id: string;
+  /** Centre of the icon, normalized 0..1. */
+  pos: { x: number; y: number };
+  /** Edge length in 1290-wide canvas space (scaled at export per device). */
+  size: number;
+  /** Key in ICONS (lib/icons.ts). */
+  icon: string;
+  color: string;
+  /** Degrees, rotated around the icon's centre. */
+  rotation: number;
+};
+
+export type SlotElement = TextElement | IconElement;
+
 export type SlotConfig = {
-  headlinePos: { x: number; y: number }; // normalized
-  headlineSize: number; // px on 1290-wide canvas
-  headlineColor: string;
-  subheadPos: { x: number; y: number };
-  subheadSize: number;
-  subheadColor: string;
-  devicePos: { x: number; y: number }; // normalized center of device
-  deviceScale: number; // 0..1 relative to canvas width
-  deviceRotation: number; // degrees, Z-axis spin
-  deviceTiltX: number; // degrees, rotation around the device's X axis (+ tilts top away)
-  deviceTiltY: number; // degrees, rotation around the device's Y axis (+ tilts right side away, shows left edge)
-  backgroundColor?: string; // optional per-slot override (solid color fallback)
-  bgImagePan: { x: number; y: number }; // -1..1 normalized
-  bgImageZoom: number; // 1..3
-  bgImageBlur: number; // px in 1290-wide canvas space
-  bgImageBrightness: number; // 0..1.5 multiplier
+  devicePos: { x: number; y: number };
+  deviceScale: number;
+  deviceRotation: number;
+  deviceTiltX: number;
+  deviceTiltY: number;
+  backgroundColor?: string;
+  bgImagePan: { x: number; y: number };
+  bgImageZoom: number;
+  bgImageBlur: number;
+  bgImageBrightness: number;
+  /** Free-form text + icon elements rendered on top of the background and
+   *  device. Empty array means a slot with no overlay copy/icons. */
+  elements: SlotElement[];
 };
 
 export const DEFAULT_TEMPLATE_CONFIG: TemplateConfig = {
@@ -57,15 +118,11 @@ export const DEFAULT_TEMPLATE_CONFIG: TemplateConfig = {
   bgImagePanoBlur: 0,
   bgImagePanoBrightness: 1,
   bezelColor: "#1f1f1f",
+  bezelCornerRadius: 90,
+  customIcons: [],
 };
 
 export const DEFAULT_SLOT_CONFIG: SlotConfig = {
-  headlinePos: { x: 0.5, y: 0.12 },
-  headlineSize: 96,
-  headlineColor: "#ffffff",
-  subheadPos: { x: 0.5, y: 0.22 },
-  subheadSize: 56,
-  subheadColor: "#ffffff",
   devicePos: { x: 0.5, y: 0.62 },
   deviceScale: 0.7,
   deviceRotation: 0,
@@ -75,25 +132,86 @@ export const DEFAULT_SLOT_CONFIG: SlotConfig = {
   bgImageZoom: 1,
   bgImageBlur: 0,
   bgImageBrightness: 1,
+  elements: [],
 };
 
+/**
+ * Build the default starter text element placed on a brand-new slot.
+ * One bold headline-style element near the top so the canvas isn't empty.
+ */
+export function defaultHeadlineElement(text = "Headline"): TextElement {
+  return {
+    type: "text",
+    id: newElementId(),
+    pos: { x: 0.5, y: 0.12 },
+    width: 0.9,
+    align: "center",
+    text,
+    fontSize: 96,
+    weight: 700,
+    italic: false,
+    color: "#ffffff",
+    rotation: 0,
+  };
+}
+
+export function defaultTextElement(text = "Text"): TextElement {
+  return {
+    type: "text",
+    id: newElementId(),
+    pos: { x: 0.5, y: 0.5 },
+    width: 0.8,
+    align: "center",
+    text,
+    fontSize: 64,
+    weight: 500,
+    italic: false,
+    color: "#ffffff",
+    rotation: 0,
+  };
+}
+
+export function defaultIconElement(icon: string): IconElement {
+  return {
+    type: "icon",
+    id: newElementId(),
+    pos: { x: 0.5, y: 0.4 },
+    size: 120,
+    icon,
+    color: "#ffffff",
+    rotation: 0,
+  };
+}
+
+function newElementId(): string {
+  // Available in modern browsers + Node 22+; the editor only runs in client.
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  // Fallback — only used in degraded environments.
+  return `el-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+}
+
 export function parseTemplateConfig(raw: string | null | undefined): TemplateConfig {
-  if (!raw) return DEFAULT_TEMPLATE_CONFIG;
+  if (!raw) return { ...DEFAULT_TEMPLATE_CONFIG };
   try {
-    return { ...DEFAULT_TEMPLATE_CONFIG, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_TEMPLATE_CONFIG,
+      ...parsed,
+      customIcons: Array.isArray(parsed.customIcons) ? parsed.customIcons : [],
+    };
   } catch {
-    return DEFAULT_TEMPLATE_CONFIG;
+    return { ...DEFAULT_TEMPLATE_CONFIG };
   }
 }
 
 export function parseSlotConfig(raw: string | null | undefined): SlotConfig {
-  if (!raw) return DEFAULT_SLOT_CONFIG;
+  if (!raw) return { ...DEFAULT_SLOT_CONFIG };
   try {
     const parsed = JSON.parse(raw);
 
-    // Migration: pre-rename, `deviceTiltX` held what we now call `deviceTiltY`
-    // (rotation around Y axis, i.e. side-to-side lean). Detect by absence of
-    // `deviceTiltY` in the saved config and move the value across.
+    // Migration: pre-rename, `deviceTiltX` held what we now call `deviceTiltY`.
     if (
       typeof parsed.deviceTiltX === "number" &&
       typeof parsed.deviceTiltY !== "number"
@@ -106,8 +224,9 @@ export function parseSlotConfig(raw: string | null | undefined): SlotConfig {
       ...DEFAULT_SLOT_CONFIG,
       ...parsed,
       bgImagePan: { ...DEFAULT_SLOT_CONFIG.bgImagePan, ...(parsed.bgImagePan ?? {}) },
+      elements: Array.isArray(parsed.elements) ? parsed.elements : [],
     };
   } catch {
-    return DEFAULT_SLOT_CONFIG;
+    return { ...DEFAULT_SLOT_CONFIG };
   }
 }

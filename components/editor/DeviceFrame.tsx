@@ -21,6 +21,7 @@ export function DeviceFrame({
   slotNumber,
   screenshot,
   bezelColor,
+  cornerRadius,
   tiltX,
   tiltY,
   subdivisions = 20,
@@ -28,13 +29,23 @@ export function DeviceFrame({
   slotNumber: number;
   screenshot?: HTMLImageElement | null;
   bezelColor: string;
+  /** Bezel corner radius in 1290-wide canvas px. */
+  cornerRadius?: number;
   tiltX: number;
   tiltY: number;
   subdivisions?: number;
 }) {
+  const effectiveRadius = cornerRadius ?? CORNER_RADIUS;
+
   const flat = useMemo(
-    () => renderFlatDeviceFrame({ screenshot, slotNumber, bezelColor }),
-    [screenshot, slotNumber, bezelColor]
+    () =>
+      renderFlatDeviceFrame({
+        screenshot,
+        slotNumber,
+        bezelColor,
+        cornerRadius: effectiveRadius,
+      }),
+    [screenshot, slotNumber, bezelColor, effectiveRadius]
   );
 
   const tilted = useMemo(() => {
@@ -51,7 +62,7 @@ export function DeviceFrame({
     const device = computeTiltedDevice(
       BEZEL_W,
       BEZEL_H,
-      CORNER_RADIUS,
+      effectiveRadius,
       tiltX,
       tiltY,
       { sideFill }
@@ -64,7 +75,7 @@ export function DeviceFrame({
       pivotX: device.pivot.x,
       pivotY: device.pivot.y,
     };
-  }, [flat, bezelColor, tiltX, tiltY, subdivisions]);
+  }, [flat, bezelColor, effectiveRadius, tiltX, tiltY, subdivisions]);
 
   return (
     <KonvaImage
