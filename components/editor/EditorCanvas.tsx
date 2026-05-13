@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Stage, Layer, Rect, Text, Group } from "react-konva";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Stage, Layer, Image as KonvaImage, Text, Group } from "react-konva";
 import type Konva from "konva";
 import {
   CANVAS_HEIGHT,
@@ -9,6 +9,7 @@ import {
   SlotConfig,
   TemplateConfig,
 } from "@/lib/editor-types";
+import { renderBackgroundCanvas } from "@/lib/background";
 import { DeviceFrame } from "./DeviceFrame";
 import { useImage } from "./useImage";
 
@@ -21,6 +22,8 @@ type Props = {
   screenshotUrl?: string | null;
   readOnly?: boolean;
   maxWidthClass?: string;
+  /** Override perspective subdivisions; default 20 for live editor. */
+  tiltSubdivisions?: number;
   onChange?: (next: SlotConfig) => void;
 };
 
@@ -33,11 +36,14 @@ export function EditorCanvas({
   screenshotUrl,
   readOnly = false,
   maxWidthClass = "max-w-md",
+  tiltSubdivisions = 20,
   onChange,
 }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [displayWidth, setDisplayWidth] = useState(400);
   const screenshot = useImage(screenshotUrl ?? null);
+  const bgImageUrl = template.bgImagePath ? `/api/uploads/${template.bgImagePath}` : null;
+  const bgImage = useImage(bgImageUrl);
 
   useEffect(() => {
     if (!wrapperRef.current) return;
@@ -52,7 +58,25 @@ export function EditorCanvas({
 
   const scale = displayWidth / CANVAS_WIDTH;
   const displayHeight = CANVAS_HEIGHT * scale;
-  const bg = slot.backgroundColor ?? template.backgroundColor;
+  const fallbackColor = slot.backgroundColor ?? template.backgroundColor;
+
+  // Rebuild the background canvas only when its inputs change. Keyed on the
+  // primitive values that affect the image, not on object identity.
+  const bgCanvas = useMemo(
+    () =>
+      renderBackgroundCanvas({
+        width: CANVAS_WIDTH,
+        height: CANVAS_HEIGHT,
+        bgImage,
+        slot,
+        fallbackColor,
+      }),
+    [
+      bgImage,
+      slot,
+      fallbackColor,
+    ]
+  );
 
   const headlineX = slot.headlinePos.x * CANVAS_WIDTH;
   const headlineY = slot.headlinePos.y * CANVAS_HEIGHT;
@@ -77,7 +101,14 @@ export function EditorCanvas({
         className="rounded-2xl overflow-hidden shadow-xl"
       >
         <Layer>
-          <Rect x={0} y={0} width={CANVAS_WIDTH} height={CANVAS_HEIGHT} fill={bg} />
+          <KonvaImage
+            image={bgCanvas}
+            x={0}
+            y={0}
+            width={CANVAS_WIDTH}
+            height={CANVAS_HEIGHT}
+            listening={false}
+          />
 
           <Group
             x={deviceX}
@@ -98,7 +129,14 @@ export function EditorCanvas({
               });
             }}
           >
-            <DeviceFrame slotNumber={slotNumber} screenshot={screenshot} />
+            <DeviceFrame
+              slotNumber={slotNumber}
+              screenshot={screenshot}
+              bezelColor={template.bezelColor}
+              tiltX={slot.deviceTiltX}
+              tiltY={slot.deviceTiltY}
+              subdivisions={tiltSubdivisions}
+            />
           </Group>
 
           <Text

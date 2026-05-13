@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import {
   DEFAULT_SLOT_CONFIG,
-  DEFAULT_TEMPLATE_CONFIG,
   parseSlotConfig,
   parseTemplateConfig,
   SlotConfig,
@@ -60,12 +59,13 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
   );
   const [activeIdx, setActiveIdx] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [uploadingBg, setUploadingBg] = useState(false);
+  const bgFileInput = useRef<HTMLInputElement>(null);
 
   const active = slots[activeIdx];
 
   // ---- Autosave ----
 
-  // Track which slots/template are dirty since last save.
   const dirtySlotIds = useRef<Set<string>>(new Set());
   const templateDirty = useRef(false);
 
@@ -156,10 +156,42 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
     if (!res.ok) return;
     setSlots((prev) => {
       const next = prev.filter((s) => s.id !== active.id);
-      // re-number locally so order matches what server did
       return next.map((s, i) => ({ ...s, order: i + 1 }));
     });
     setActiveIdx((idx) => Math.max(0, idx - 1));
+  }
+
+  // ---- Background image upload / remove ----
+
+  async function uploadBg(file: File) {
+    setUploadingBg(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/templates/${initial.id}/background`, {
+      method: "POST",
+      body: fd,
+    });
+    setUploadingBg(false);
+    if (res.ok) {
+      const json = await res.json();
+      setTemplateConfig((c) => ({ ...c, bgImagePath: json.bgImagePath }));
+    } else {
+      alert("Upload failed");
+    }
+  }
+
+  async function removeBg() {
+    if (!confirm("Remove background image?")) return;
+    const res = await fetch(`/api/templates/${initial.id}/background`, {
+      method: "DELETE",
+    });
+    if (res.ok) {
+      setTemplateConfig((c) => {
+        const { bgImagePath: _drop, ...rest } = c;
+        void _drop;
+        return rest;
+      });
+    }
   }
 
   // ---- Flush on unmount / nav away ----
@@ -179,57 +211,99 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
     []
   );
 
+  const hasBg = !!templateConfig.bgImagePath;
+  const bgThumbUrl = templateConfig.bgImagePath
+    ? `/api/uploads/${templateConfig.bgImagePath}`
+    : null;
+
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
-      {/* ---- Canvas ---- */}
-      <div className="flex flex-col items-center">
-        <EditorCanvas
-          template={templateConfig}
-          slot={active.config}
-          slotNumber={active.order}
-          headline={active.headline}
-          subhead={active.subhead || null}
-          onChange={(next) => updateSlotConfig(active.id, next)}
-        />
+      {/* ---- Left column ---- */}
+      <div className="flex flex-col items-stretch">
+        {/* Filmstrip */}
+        <div className="mb-4 flex gap-2 overflow-x-auto pb-2 -mx-2 px-2">
+          {slots.map((s, i) => {
+            const isActive = i === activeIdx;
+            return (
+              <button
+                key={s.id}
+                onClick={() => setActiveIdx(i)}
+                className={`shrink-0 rounded-lg p-1 border ${
+                  isActive
+                    ? "border-blue-500 ring-2 ring-blue-500"
+                    : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
+                }`}
+                title={`Slot ${s.order}`}
+              >
+                <div style={{ width: 110 }}>
+                  <EditorCanvas
+                    template={templateConfig}
+                    slot={s.config}
+                    slotNumber={s.order}
+                    headline={s.headline}
+                    subhead={s.subhead || null}
+                    readOnly
+                    maxWidthClass=""
+                    tiltSubdivisions={12}
+                  />
+                </div>
+                <div className="text-[10px] text-center text-zinc-500 mt-1">
+                  {s.order}
+                </div>
+              </button>
+            );
+          })}
+        </div>
 
-        {/* Slot nav */}
-        <div className="mt-6 flex items-center gap-2">
-          <button
-            onClick={() => setActiveIdx((i) => Math.max(0, i - 1))}
-            disabled={activeIdx === 0}
-            className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
-          >
-            ←
-          </button>
-          <span className="text-sm tabular-nums px-2">
-            Slot {active.order} of {slots.length}
-          </span>
-          <button
-            onClick={() => setActiveIdx((i) => Math.min(slots.length - 1, i + 1))}
-            disabled={activeIdx === slots.length - 1}
-            className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
-          >
-            →
-          </button>
-          <button
-            onClick={addSlot}
-            className="ml-2 px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-          >
-            + Add
-          </button>
-          <button
-            onClick={removeSlot}
-            disabled={slots.length <= 1}
-            className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-          >
-            − Remove
-          </button>
+        {/* Main editable canvas */}
+        <div className="flex flex-col items-center">
+          <EditorCanvas
+            template={templateConfig}
+            slot={active.config}
+            slotNumber={active.order}
+            headline={active.headline}
+            subhead={active.subhead || null}
+            onChange={(next) => updateSlotConfig(active.id, next)}
+          />
+
+          {/* Slot nav */}
+          <div className="mt-6 flex items-center gap-2">
+            <button
+              onClick={() => setActiveIdx((i) => Math.max(0, i - 1))}
+              disabled={activeIdx === 0}
+              className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
+            >
+              ←
+            </button>
+            <span className="text-sm tabular-nums px-2">
+              Slot {active.order} of {slots.length}
+            </span>
+            <button
+              onClick={() => setActiveIdx((i) => Math.min(slots.length - 1, i + 1))}
+              disabled={activeIdx === slots.length - 1}
+              className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
+            >
+              →
+            </button>
+            <button
+              onClick={addSlot}
+              className="ml-2 px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              + Add
+            </button>
+            <button
+              onClick={removeSlot}
+              disabled={slots.length <= 1}
+              className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              − Remove
+            </button>
+          </div>
         </div>
       </div>
 
       {/* ---- Inspector ---- */}
       <aside className="space-y-6">
-        {/* Template name */}
         <Section title="Template">
           <Label>Name</Label>
           <input
@@ -241,7 +315,8 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
             onBlur={() => router.refresh()}
             className="input"
           />
-          <Label className="mt-3">Default background</Label>
+
+          <Label className="mt-3">Default background color</Label>
           <ColorRow
             value={templateConfig.backgroundColor}
             onChange={(v) => {
@@ -250,9 +325,54 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
             }}
             palette={palette}
           />
+
+          <Label className="mt-3">Bezel color</Label>
+          <ColorRow
+            value={templateConfig.bezelColor}
+            onChange={(v) => {
+              setTemplateConfig((c) => ({ ...c, bezelColor: v }));
+              markTemplateDirty();
+            }}
+            palette={["#1f1f1f", "#3f3f46", "#6b6b6b", "#c4c4c4", "#e8e8e8", "#1e3a8a"]}
+          />
+
+          <Label className="mt-3">Background image</Label>
+          <div className="flex items-center gap-2">
+            {bgThumbUrl && (
+              <div
+                className="w-12 h-12 rounded border border-zinc-300 dark:border-zinc-700 bg-cover bg-center"
+                style={{ backgroundImage: `url("${bgThumbUrl}")` }}
+              />
+            )}
+            <input
+              ref={bgFileInput}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) uploadBg(file);
+                e.target.value = "";
+              }}
+            />
+            <button
+              onClick={() => bgFileInput.current?.click()}
+              disabled={uploadingBg}
+              className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {uploadingBg ? "Uploading…" : hasBg ? "Replace" : "Upload"}
+            </button>
+            {hasBg && (
+              <button
+                onClick={removeBg}
+                className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                Remove
+              </button>
+            )}
+          </div>
         </Section>
 
-        {/* Slot copy */}
         <Section title={`Slot ${active.order}`}>
           <Label>Headline</Label>
           <input
@@ -269,9 +389,8 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
           />
         </Section>
 
-        {/* Slot style */}
         <Section title="Style">
-          <Label>Background override</Label>
+          <Label>Background override (color)</Label>
           <ColorRow
             value={active.config.backgroundColor ?? templateConfig.backgroundColor}
             onChange={(v) =>
@@ -320,13 +439,33 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
             palette={["#ffffff", "#000000", "#f3f4f6", "#1f2937", "#fef3c7"]}
           />
 
-          <Label className="mt-3">Device tilt</Label>
+          <Label className="mt-3">Device rotation (Z-axis spin)</Label>
           <Slider
             min={-30}
             max={30}
             value={active.config.deviceRotation}
             onChange={(v) =>
               updateSlotConfig(active.id, { ...active.config, deviceRotation: v })
+            }
+          />
+
+          <Label className="mt-3">Device tilt — show side edge (Y axis)</Label>
+          <Slider
+            min={-30}
+            max={30}
+            value={active.config.deviceTiltY}
+            onChange={(v) =>
+              updateSlotConfig(active.id, { ...active.config, deviceTiltY: v })
+            }
+          />
+
+          <Label className="mt-3">Device tilt — show top/bottom edge (X axis)</Label>
+          <Slider
+            min={-30}
+            max={30}
+            value={active.config.deviceTiltX}
+            onChange={(v) =>
+              updateSlotConfig(active.id, { ...active.config, deviceTiltX: v })
             }
           />
 
@@ -340,6 +479,71 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
               updateSlotConfig(active.id, { ...active.config, deviceScale: v })
             }
           />
+        </Section>
+
+        <Section title="Background image framing">
+          {!hasBg && (
+            <div className="text-xs text-zinc-500 mb-2">
+              Upload a background image (Template section above) to enable these controls.
+            </div>
+          )}
+          <div className={hasBg ? "" : "opacity-40 pointer-events-none"}>
+            <Label>Pan X</Label>
+            <Slider
+              min={-1}
+              max={1}
+              step={0.05}
+              value={active.config.bgImagePan.x}
+              onChange={(v) =>
+                updateSlotConfig(active.id, {
+                  ...active.config,
+                  bgImagePan: { ...active.config.bgImagePan, x: v },
+                })
+              }
+            />
+            <Label className="mt-3">Pan Y</Label>
+            <Slider
+              min={-1}
+              max={1}
+              step={0.05}
+              value={active.config.bgImagePan.y}
+              onChange={(v) =>
+                updateSlotConfig(active.id, {
+                  ...active.config,
+                  bgImagePan: { ...active.config.bgImagePan, y: v },
+                })
+              }
+            />
+            <Label className="mt-3">Zoom</Label>
+            <Slider
+              min={1}
+              max={3}
+              step={0.1}
+              value={active.config.bgImageZoom}
+              onChange={(v) =>
+                updateSlotConfig(active.id, { ...active.config, bgImageZoom: v })
+              }
+            />
+            <Label className="mt-3">Blur (focus)</Label>
+            <Slider
+              min={0}
+              max={60}
+              value={active.config.bgImageBlur}
+              onChange={(v) =>
+                updateSlotConfig(active.id, { ...active.config, bgImageBlur: v })
+              }
+            />
+            <Label className="mt-3">Brightness</Label>
+            <Slider
+              min={0}
+              max={1.5}
+              step={0.05}
+              value={active.config.bgImageBrightness}
+              onChange={(v) =>
+                updateSlotConfig(active.id, { ...active.config, bgImageBrightness: v })
+              }
+            />
+          </div>
         </Section>
 
         <div className="text-xs text-zinc-500 text-right h-4">
