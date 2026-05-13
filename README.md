@@ -1,14 +1,14 @@
 # ScreenshotMaker
 
-Self-hosted web app for generating App Store Connect–ready screenshots from a reusable template.
+Self-hosted web app for generating App Store Connect–ready screenshots.
 
-Build a template once (background, headline copy, device frame, text positions, colors). For each app release, drop in new screenshots → download a ZIP organized by device size, ready to upload to App Store Connect.
+One project = one app's screenshot set: visual design + screenshots + export, all on a single page. Drop new screenshots in for each release → download a ZIP organized by device size, ready to upload to App Store Connect.
 
 ---
 
 ## What it does
 
-1. **Templates** define the visual recipe for an app's screenshot set:
+1. A **Project** is the unit of work — it owns the visual recipe **and** the screenshots:
    - Configurable number of slots (one per screenshot in the final set; up to 10)
    - Filmstrip view — see every slot at once while editing
    - **Free-form text + icon elements** per slot (paint-program style): create / delete / move / rotate any number of text boxes and icons; resize via corner handles, rotate via the top handle, double-click text to edit in place
@@ -22,10 +22,7 @@ Build a template once (background, headline copy, device frame, text positions, 
    - Device tilt around **both** X and Y axes (real pseudo-3D perspective with visible side edges), plus Z-axis spin
    - Device scale / position, all coordinates normalized 0–1 so layouts scale to multiple device sizes at export
 
-2. **Projects** apply a template to a set of screenshots:
-   - Drag-and-drop multi-file upload (auto-maps to slots in upload order)
-   - Replace, remove, reorder per slot
-   - Live preview of how each slot will look
+2. **Screenshots are managed on the same page as the design.** Drag-and-drop multi-file upload (fills empty slots in order); per-slot replace / remove right under each filmstrip thumbnail.
 
 3. **Export** renders every (slot × device-size) combination at native App Store pixel dimensions and bundles them into a ZIP:
    ```
@@ -54,9 +51,9 @@ Build a template once (background, headline copy, device frame, text positions, 
 ```
 screenshotmaker/
 ├── app/
-│   ├── page.tsx                              # Project + template list
-│   ├── templates/[id]/page.tsx               # Template editor host
-│   ├── projects/[id]/page.tsx                # Project editor host
+│   ├── page.tsx                              # Project list (single home view)
+│   ├── projects/[id]/page.tsx                # Unified editor — visual + screenshots + export
+│   ├── templates/[id]/page.tsx               # Legacy URL redirect → /projects/<id>
 │   └── api/
 │       ├── templates/                        # GET, POST, PATCH, DELETE
 │       ├── templates/[id]/slots/             # POST to add a slot
@@ -68,14 +65,13 @@ screenshotmaker/
 │       ├── screens/[id]/move/                # POST { direction: "up" | "down" }
 │       └── uploads/[...path]/                # GET file (path-traversal protected)
 ├── components/
-│   ├── NewTemplateButton / NewProjectButton / DeleteButton
+│   ├── NewProjectButton / DeleteButton
 │   ├── editor/
-│   │   ├── TemplateEditor.tsx                # editor shell, filmstrip, slot nav, autosave
+│   │   ├── TemplateEditor.tsx                # the unified editor — visual config + (in project context) drop zone, per-slot upload, export
 │   │   ├── EditorCanvas.tsx                  # react-konva Stage (dynamic, ssr:false)
 │   │   ├── DeviceFrame.tsx                   # warped Konva.Image of the flat+tilted device canvas
 │   │   └── useImage.ts
 │   └── project/
-│       ├── ProjectEditor.tsx                 # drop zone, slot grid
 │       └── ExportButton.tsx                  # renders all (slot × device) → ZIP
 ├── lib/
 │   ├── db.ts                                 # Prisma client singleton
@@ -113,6 +109,8 @@ The device and background are rendered through the **same code path** in both th
 
 ```prisma
 model Template {
+  // Implementation detail: every Project has exactly one Template (1:1 sidecar
+  // holding the visual config + slots). Templates are not surface area in the UI.
   id        String   @id
   name      String
   slotCount Int
@@ -310,20 +308,18 @@ Sanity checks after move:
 
 ## End-to-end workflow
 
-1. **Create a template:** name + slot count → opens the editor.
-2. **In the template editor:**
-   - The **filmstrip** at the top shows every slot live; click any thumbnail to make it the active full-size canvas.
-   - **Add text or icons** to the active slot with `+ Add text` / `+ Add icon`. Each element is independently draggable, rotatable (top handle), and resizable (corner handles). **Double-click text** to edit in place — the textarea matches the rendered font/size/rotation.
+1. **Create a project:** name + slot count → opens the unified editor.
+2. **Drop screenshots** into the drop zone above the filmstrip. They fill empty slots in upload order; per-slot `⟳` replace / `✕` remove buttons sit under each thumbnail.
+3. **Design in the same page:**
+   - The **filmstrip** shows every slot with its real screenshot once uploaded; click any thumbnail to make it the active full-size canvas.
+   - **Add text or icons** to the active slot with `+ Add text` / `+ Add icon`. Each element is independently draggable, rotatable (top handle), and resizable (corner handles). **Double-click text** to edit in place — the overlay textarea matches the rendered font/size/rotation.
    - Per-text-element: font picker (~20 system families), Bold / Italic toggles, weight 400–800, colour, align, rotation slider. Width auto-fits to typed content.
-   - Per-icon-element: pick from 12 built-ins, or **upload your own SVG** files (per template); set size, colour (built-ins), rotation.
-   - Tune device tilt (X axis = top/bottom edge, Y axis = side edge), rotation (Z-axis spin), and scale.
+   - Per-icon-element: pick from 12 built-ins, or **upload your own SVG** files (per project); set size, colour (built-ins), rotation.
+   - Tune device tilt (X axis = top/bottom edge, Y axis = side edge), rotation (Z-axis spin), scale.
    - Pick a **bezel colour** preset / custom hue and a **bezel corner radius** (0 = sharp, 200 = pill).
-   - Upload a **background image** to the template; per-slot sliders control pan / zoom / blur / brightness in single mode (template-wide sliders in panorama mode).
+   - Upload a **background image**; per-slot sliders control pan / zoom / blur / brightness in single mode (template-wide sliders in panorama mode).
    - Changes autosave every 600ms.
-3. **Create a project** using that template.
-4. **Drop screenshots** into the drop zone. They fill empty slots in upload order.
-5. **Tweak:** replace one screenshot, reorder with ↑/↓, remove with ✕.
-6. **Export ZIP** — disabled until every slot has a screenshot. Click → renders all `(slot × device-size)` combinations, packs into ZIP, downloads.
+4. **Export ZIP** — button below the drop zone, disabled until every slot has a screenshot. Click → renders all `(slot × device-size)` combinations, packs into ZIP, downloads.
 
 ---
 
@@ -337,6 +333,7 @@ Sanity checks after move:
 - **No auth.** Anyone with network access to the port can use the app. Intended for LAN / Tailscale. Add basic auth middleware if exposing publicly.
 - **Perspective tilt is rounded-rect prism, not true 3D.** Looks correct for typical hero-shot angles (≤30°); extreme angles will show projection artefacts.
 - **Legacy `Slot.headline` / `Slot.subhead` columns** still exist in the DB schema but are no longer read or written — kept to avoid a Prisma migration. Safe to drop in a future schema cleanup.
+- **DB still has separate `Template` and `Project` tables** even though the UI presents them as one. They're a 1:1 sidecar. Orphan templates (without a project) are auto-promoted by creating a matching project on home-page load.
 
 ---
 
@@ -353,6 +350,7 @@ Built incrementally:
 7. **Panorama backgrounds** — second bg mode that splits the source image into N equal vertical bands so the slots side-by-side form one continuous backdrop; template-wide zoom/blur/brightness sliders keep the panorama seamless; uploads timestamped to defeat HTTP + React caches.
 8. **Free-form elements + paint-program direct manipulation** — replaced the fixed headline/subhead pair with an unbounded `elements: SlotElement[]` array of text boxes and icons. Konva `Transformer` gives every selected element corner-resize + rotate handles; double-click text opens an in-place HTML overlay editor matching the rendered font / size / rotation. Text boxes auto-fit their typed content (no manual wrap-width). Per-element font picker (~20 system fonts), Bold + Italic toggles, weight, colour, align, rotation.
 9. **Custom SVG icons + bezel corner radius** — upload your own SVG files per template (stored under `data/uploads/templates/<id>/icons/`), pick them from the same icon picker grid; new `TemplateConfig.bezelCornerRadius` slider (0–200 px) lets the device frame range from sharp rectangle to pill shape.
+10. **UI collapse: one project, one editor** — Template and Project were redundant in practice (you almost always make one project per template). The home page now lists Projects only; the project page hosts the full visual editor + drop zone + per-slot screenshot management + export on a single screen. DB schema is unchanged (Template still exists as a 1:1 sidecar); orphan templates from before the collapse get auto-promoted to projects on home load. Legacy `/templates/<id>` URLs redirect to their matching project.
 
 ---
 

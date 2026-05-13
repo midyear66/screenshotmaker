@@ -22,6 +22,7 @@ import {
 import { ICON_KEYS, ICONS } from "@/lib/icons";
 import { FONT_OPTIONS, TEMPLATE_FONT_VALUE } from "@/lib/fonts";
 import { autoWidth } from "@/lib/textMeasure";
+import { ExportButton } from "@/components/project/ExportButton";
 
 const EditorCanvas = dynamic(
   () => import("./EditorCanvas").then((m) => m.EditorCanvas),
@@ -42,13 +43,36 @@ export type TemplatePayload = {
   slots: SlotPayload[];
 };
 
+export type ScreenPayload = {
+  id: string;
+  slotOrder: number;
+  screenshotPath: string;
+};
+
+export type ProjectContext = {
+  projectId: string;
+  projectName: string;
+  screens: ScreenPayload[];
+};
+
 type SlotState = {
   id: string;
   order: number;
   config: SlotConfig;
 };
 
-export function TemplateEditor({ template: initial }: { template: TemplatePayload }) {
+export function TemplateEditor({
+  template: initial,
+  project,
+}: {
+  template: TemplatePayload;
+  /**
+   * When supplied, the editor also renders screenshot management UI
+   * (drop zone, per-slot upload, export). When omitted, it's a pure
+   * template editor with placeholder canvases.
+   */
+  project?: ProjectContext;
+}) {
   const router = useRouter();
 
   const [templateConfig, setTemplateConfig] = useState<TemplateConfig>(() =>
@@ -307,6 +331,66 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
     // user can delete those elements via the inspector list.
   }
 
+  // ---- Screenshot upload / remove / move (only when project context exists) ----
+
+  const screensByOrder = useMemo(() => {
+    const m = new Map<number, ScreenPayload>();
+    if (project) {
+      for (const s of project.screens) m.set(s.slotOrder, s);
+    }
+    return m;
+  }, [project]);
+
+  const filledScreenCount = project?.screens.length ?? 0;
+  const isReady = !!project && filledScreenCount === slots.length;
+
+  const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const slotFileInput = useRef<HTMLInputElement>(null);
+  const replaceTargetSlot = useRef<number | null>(null);
+
+  async function uploadFiles(files: FileList | File[]) {
+    if (!project) return;
+    if (files.length === 0) return;
+    setUploading(true);
+    const fd = new FormData();
+    for (const f of Array.from(files)) fd.append("file", f);
+    const res = await fetch(`/api/projects/${project.projectId}/screens`, {
+      method: "POST",
+      body: fd,
+    });
+    setUploading(false);
+    if (res.ok) router.refresh();
+    else alert("Upload failed");
+  }
+
+  async function replaceSlotScreenshot(slotOrder: number, file: File) {
+    if (!project) return;
+    setUploading(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("slotOrder", String(slotOrder));
+    const res = await fetch(`/api/projects/${project.projectId}/screens`, {
+      method: "POST",
+      body: fd,
+    });
+    setUploading(false);
+    if (res.ok) router.refresh();
+    else alert("Upload failed");
+  }
+
+  async function deleteScreen(screenId: string) {
+    if (!confirm("Remove this screenshot?")) return;
+    const res = await fetch(`/api/screens/${screenId}`, { method: "DELETE" });
+    if (res.ok) router.refresh();
+  }
+
+  function onDropZoneDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragging(false);
+    if (e.dataTransfer.files.length > 0) uploadFiles(e.dataTransfer.files);
+  }
+
   // ---- Flush on unmount / nav away ----
   useEffect(() => {
     const onBeforeUnload = () => {
@@ -329,40 +413,140 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
     ? `/api/uploads/${templateConfig.bgImagePath}`
     : null;
 
+  // Project export payload for ExportButton (when in project context).
+  const exportPayload = project
+    ? {
+        id: project.projectId,
+        name: project.projectName,
+        template: {
+          id: initial.id,
+          name: templateName,
+          slotCount: slots.length,
+          config: JSON.stringify(templateConfig),
+          slots: slots.map((s) => ({
+            id: s.id,
+            order: s.order,
+            config: JSON.stringify(s.config),
+          })),
+        },
+        screens: project.screens,
+      }
+    : null;
+
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       {/* ---- Left column ---- */}
       <div className="flex flex-col items-stretch">
+        {/* Screenshot toolbar (only in project context) */}
+        {project && (
+          <>
+            <input
+              ref={slotFileInput}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                const slot = replaceTargetSlot.current;
+                if (file && slot != null) replaceSlotScreenshot(slot, file);
+                e.target.value = "";
+              }}
+            />
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={onDropZoneDrop}
+              className={`rounded-lg border-2 border-dashed p-3 text-center mb-4 transition-colors ${
+                dragging
+                  ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
+                  : "border-zinc-300 dark:border-zinc-700"
+              }`}
+            >
+              <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                Drop screenshots to fill empty slots, or{" "}
+                <label className="underline cursor-pointer">
+                  choose files
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => e.target.files && uploadFiles(e.target.files)}
+                  />
+                </label>
+                .
+              </p>
+              <p className="text-[11px] text-zinc-500 mt-0.5">
+                {uploading ? "Uploading…" : `${filledScreenCount} / ${slots.length} screens filled`}
+                {isReady && " · ready to export"}
+              </p>
+            </div>
+            <div className="mb-4 flex items-center justify-end">
+              {exportPayload && <ExportButton project={exportPayload} ready={isReady} />}
+            </div>
+          </>
+        )}
+
         {/* Filmstrip */}
         <div className="mb-4 flex gap-2 overflow-x-auto pb-2 -mx-2 px-2">
           {slots.map((s, i) => {
             const isActive = i === activeIdx;
+            const screen = screensByOrder.get(s.order);
+            const screenshotUrl = screen ? `/api/uploads/${screen.screenshotPath}` : undefined;
             return (
-              <button
-                key={s.id}
-                onClick={() => setActiveIdx(i)}
-                className={`shrink-0 rounded-lg p-1 border ${
-                  isActive
-                    ? "border-blue-500 ring-2 ring-blue-500"
-                    : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
-                }`}
-                title={`Slot ${s.order}`}
-              >
-                <div style={{ width: 110 }}>
-                  <EditorCanvas
-                    template={templateConfig}
-                    slot={s.config}
-                    slotNumber={s.order}
-                    totalSlots={slots.length}
-                    readOnly
-                    maxWidthClass=""
-                    tiltSubdivisions={12}
-                  />
+              <div key={s.id} className="shrink-0 flex flex-col items-center gap-1">
+                <button
+                  onClick={() => setActiveIdx(i)}
+                  className={`rounded-lg p-1 border ${
+                    isActive
+                      ? "border-blue-500 ring-2 ring-blue-500"
+                      : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
+                  }`}
+                  title={`Slot ${s.order}`}
+                >
+                  <div style={{ width: 110 }}>
+                    <EditorCanvas
+                      template={templateConfig}
+                      slot={s.config}
+                      slotNumber={s.order}
+                      totalSlots={slots.length}
+                      screenshotUrl={screenshotUrl}
+                      readOnly
+                      maxWidthClass=""
+                      tiltSubdivisions={12}
+                    />
+                  </div>
+                </button>
+                <div className="flex items-center gap-1 text-[10px] text-zinc-500">
+                  <span>{s.order}</span>
+                  {project && (
+                    <>
+                      <button
+                        onClick={() => {
+                          replaceTargetSlot.current = s.order;
+                          slotFileInput.current?.click();
+                        }}
+                        title={screen ? "Replace screenshot" : "Upload screenshot"}
+                        className="px-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                      >
+                        {screen ? "⟳" : "↑"}
+                      </button>
+                      {screen && (
+                        <button
+                          onClick={() => deleteScreen(screen.id)}
+                          title="Remove screenshot"
+                          className="px-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-red-600"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </>
+                  )}
                 </div>
-                <div className="text-[10px] text-center text-zinc-500 mt-1">
-                  {s.order}
-                </div>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -374,6 +558,14 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
             slot={active.config}
             slotNumber={active.order}
             totalSlots={slots.length}
+            screenshotUrl={
+              project
+                ? (() => {
+                    const screen = screensByOrder.get(active.order);
+                    return screen ? `/api/uploads/${screen.screenshotPath}` : undefined;
+                  })()
+                : undefined
+            }
             selectedElementId={selectedElementId}
             onChange={(next) => updateSlotConfig(active.id, next)}
             onSelectElement={setSelectedElementId}

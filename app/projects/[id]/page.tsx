@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { ProjectEditor } from "@/components/project/ProjectEditor";
+import { TemplateEditor } from "@/components/editor/TemplateEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -29,33 +29,26 @@ export default async function ProjectPage({
         >
           ← Back
         </Link>
-        <h1 className="text-lg font-semibold">{project.name}</h1>
-        <span className="text-xs text-zinc-500">
-          Template:{" "}
-          <Link
-            href={`/templates/${project.template.id}`}
-            className="hover:underline"
-          >
-            {project.template.name}
-          </Link>
+        <h1 className="text-lg font-semibold">{project.template.name}</h1>
+        <span className="text-xs text-zinc-500 tabular-nums">
+          {project.screens.length} / {project.template.slotCount} screens
         </span>
       </div>
-
-      <ProjectEditor
+      <TemplateEditor
+        template={{
+          id: project.template.id,
+          name: project.template.name,
+          slotCount: project.template.slotCount,
+          config: project.template.config,
+          slots: project.template.slots.map((s) => ({
+            id: s.id,
+            order: s.order,
+            config: s.config,
+          })),
+        }}
         project={{
-          id: project.id,
-          name: project.name,
-          template: {
-            id: project.template.id,
-            name: project.template.name,
-            slotCount: project.template.slotCount,
-            config: project.template.config,
-            slots: project.template.slots.map((s) => ({
-              id: s.id,
-              order: s.order,
-              config: s.config,
-            })),
-          },
+          projectId: project.id,
+          projectName: project.name,
           screens: project.screens.map((s) => ({
             id: s.id,
             slotOrder: s.slotOrder,

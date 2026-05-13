@@ -22,6 +22,14 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  await prisma.project.delete({ where: { id } });
+  // UI collapse: Template:Project is 1:1, so deleting a project also deletes
+  // the underlying template + its slots + any other projects sharing it
+  // (the latter shouldn't exist in practice).
+  const project = await prisma.project.findUnique({
+    where: { id },
+    select: { templateId: true },
+  });
+  if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
+  await prisma.template.delete({ where: { id: project.templateId } });
   return NextResponse.json({ ok: true });
 }

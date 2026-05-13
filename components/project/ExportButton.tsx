@@ -8,7 +8,19 @@ import {
   SlotConfig,
 } from "@/lib/editor-types";
 import { DEVICE_SIZES, renderSlotToBlob } from "@/lib/render";
-import type { ProjectPayload } from "./ProjectEditor";
+
+export type ProjectPayload = {
+  id: string;
+  name: string;
+  template: {
+    id: string;
+    name: string;
+    slotCount: number;
+    config: string;
+    slots: { id: string; order: number; config: string }[];
+  };
+  screens: { id: string; slotOrder: number; screenshotPath: string }[];
+};
 
 function sanitizeFilename(name: string) {
   return name.replace(/[^a-z0-9_\-]+/gi, "-").replace(/^-+|-+$/g, "") || "export";
