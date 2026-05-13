@@ -9,6 +9,24 @@ export type TemplateConfig = {
   backgroundColor: string;
   fontFamily: string;
   bgImagePath?: string; // relative to UPLOAD_DIR, e.g. "templates/<id>/bg.jpg"
+  /**
+   * "single"   = every slot shows the same image (per-slot pan/zoom apply).
+   * "panorama" = the image is split into N equal vertical bands, slot k gets
+   *              band k, so viewed side-by-side the slots form the full image.
+   *              Per-slot pan/zoom are ignored in this mode; blur/brightness
+   *              still apply.
+   */
+  bgImageMode: "single" | "panorama";
+  /** In panorama mode, zoom into a centered portion of the source image
+   *  (1 = full image, 2 = middle 50%, 3 = middle 33%) so the whole panorama
+   *  zooms together and adjacent slot bands stay continuous. */
+  bgImagePanoZoom: number;
+  /** Panorama-wide blur (px in 1290-wide canvas space). Applied to every
+   *  slot so the panorama looks continuous; per-slot blur is ignored in
+   *  panorama mode. */
+  bgImagePanoBlur: number;
+  /** Panorama-wide brightness multiplier (0..1.5). Same logic as blur. */
+  bgImagePanoBrightness: number;
   bezelColor: string; // hex; sides are auto-derived as a darker shade
 };
 
@@ -34,6 +52,10 @@ export type SlotConfig = {
 export const DEFAULT_TEMPLATE_CONFIG: TemplateConfig = {
   backgroundColor: "#1d4ed8",
   fontFamily: "Geist, system-ui, sans-serif",
+  bgImageMode: "single",
+  bgImagePanoZoom: 1,
+  bgImagePanoBlur: 0,
+  bgImagePanoBrightness: 1,
   bezelColor: "#1f1f1f",
 };
 

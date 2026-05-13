@@ -26,8 +26,12 @@ export async function POST(
     await deleteUpload(config.bgImagePath);
   }
 
+  // Timestamp the filename so each upload produces a unique URL. Without
+  // this, replacing a JPEG with another JPEG keeps the same path, and both
+  // the HTTP cache and the React useImage hook (keyed on URL string) miss
+  // the change — the editor keeps showing the previous image.
   const ext = extFromMime(file.type);
-  const rel = `templates/${id}/bg.${ext}`;
+  const rel = `templates/${id}/bg-${Date.now()}.${ext}`;
   const buf = Buffer.from(await file.arrayBuffer());
   await writeUpload(rel, buf);
 

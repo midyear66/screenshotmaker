@@ -12,7 +12,9 @@ Build a template once (background, headline copy, device frame, text positions, 
    - Configurable number of slots (one per screenshot in the final set; up to 10)
    - Filmstrip view — see every slot at once while editing
    - Per-slot headline + subheadline copy
-   - Background color **or** uploaded background image with per-slot pan / zoom / blur / brightness
+   - Background color **or** uploaded background image with two modes:
+     - **Single** — same image on every slot, per-slot pan / zoom / blur / brightness
+     - **Panorama** — image is split into N equal vertical bands so the slots side-by-side form one continuous backdrop; template-wide zoom / blur / brightness keep the panorama seamless
    - Bezel color picker (black / graphite / grey / silver / custom) — side ribbon shade auto-derived
    - Device tilt around **both** X and Y axes (real pseudo-3D perspective with visible side edges), plus Z-axis spin
    - Device scale / position, all coordinates normalized 0–1 so layouts scale to multiple device sizes at export
@@ -148,7 +150,11 @@ TemplateConfig = {
   backgroundColor: string;
   fontFamily: string;
   bezelColor: string;                  // hex; side ribbon = scaleColor(bezelColor, 0.6)
-  bgImagePath?: string;                // relative to UPLOAD_DIR
+  bgImagePath?: string;                // relative to UPLOAD_DIR; timestamped per upload
+  bgImageMode: "single" | "panorama";
+  bgImagePanoZoom: number;             // 1..3, only used in panorama mode
+  bgImagePanoBlur: number;             // 0..60 px, panorama mode
+  bgImagePanoBrightness: number;       // 0..1.5 multiplier, panorama mode
 }
 
 SlotConfig = {
@@ -313,6 +319,7 @@ Built incrementally:
 4. **Export** — vanilla-Konva off-DOM rendering at native device pixel sizes, multi-size ZIP packaging via JSZip, progress indicator.
 5. **Filmstrip + perspective tilt + image backgrounds** — all-slots-at-once view, real Y-axis perspective tilt (custom quad warp + canvas triangle subdivision), template-level bg image upload with per-slot pan/zoom/blur/brightness.
 6. **3D edges + dual-axis tilt + bezel colors** — device modelled as a rounded-rect prism with visible side ribbon that wraps around rounded corners; both X and Y tilt axes; bezel color picker with auto-derived side shade.
+7. **Panorama backgrounds** — second bg mode that splits the source image into N equal vertical bands so the slots side-by-side form one continuous backdrop; template-wide zoom/blur/brightness sliders keep the panorama seamless; uploads timestamped to defeat HTTP + React caches.
 
 ---
 

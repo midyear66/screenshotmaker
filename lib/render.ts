@@ -57,12 +57,13 @@ export async function renderSlotToBlob(args: {
   template: TemplateConfig;
   slot: SlotConfig;
   slotNumber: number;
+  totalSlots: number;
   headline: string;
   subhead: string | null;
   screenshotUrl: string | null;
   device: DeviceSize;
 }): Promise<Blob> {
-  const { template, slot, slotNumber, headline, subhead, screenshotUrl, device } = args;
+  const { template, slot, slotNumber, totalSlots, headline, subhead, screenshotUrl, device } = args;
 
   const xScale = device.width / CANVAS_WIDTH;
   const TEXT_BLOCK_WIDTH = CANVAS_WIDTH * 0.9 * xScale;
@@ -94,6 +95,16 @@ export async function renderSlotToBlob(args: {
       bgImage,
       slot,
       fallbackColor: slot.backgroundColor ?? template.backgroundColor,
+      panorama:
+        template.bgImageMode === "panorama"
+          ? {
+              slotIndex: slotNumber - 1,
+              totalSlots,
+              zoom: template.bgImagePanoZoom,
+              blur: template.bgImagePanoBlur,
+              brightness: template.bgImagePanoBrightness,
+            }
+          : undefined,
     });
     layer.add(
       new Konva.Image({

@@ -240,6 +240,7 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
                     template={templateConfig}
                     slot={s.config}
                     slotNumber={s.order}
+                    totalSlots={slots.length}
                     headline={s.headline}
                     subhead={s.subhead || null}
                     readOnly
@@ -261,6 +262,7 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
             template={templateConfig}
             slot={active.config}
             slotNumber={active.order}
+            totalSlots={slots.length}
             headline={active.headline}
             subhead={active.subhead || null}
             onChange={(next) => updateSlotConfig(active.id, next)}
@@ -371,6 +373,63 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
               </button>
             )}
           </div>
+
+          <Label className="mt-3">Background mode</Label>
+          <select
+            value={templateConfig.bgImageMode}
+            onChange={(e) => {
+              setTemplateConfig((c) => ({
+                ...c,
+                bgImageMode: e.target.value as "single" | "panorama",
+              }));
+              markTemplateDirty();
+            }}
+            className="input"
+          >
+            <option value="single">Single — same image on every slot</option>
+            <option value="panorama">Panorama — image spans all slots</option>
+          </select>
+          {templateConfig.bgImageMode === "panorama" && (
+            <>
+              <p className="text-[11px] text-zinc-500 mt-1 leading-snug">
+                Image is split into {slots.length} equal vertical bands; slot N gets band N.
+                Per-slot pan is ignored — recommended source width ≈{" "}
+                {1290 * slots.length}px (≈ 1290 × slot count) for crisp output.
+              </p>
+              <Label className="mt-3">Panorama zoom (whole image)</Label>
+              <Slider
+                min={1}
+                max={3}
+                step={0.05}
+                value={templateConfig.bgImagePanoZoom}
+                onChange={(v) => {
+                  setTemplateConfig((c) => ({ ...c, bgImagePanoZoom: v }));
+                  markTemplateDirty();
+                }}
+              />
+              <Label className="mt-3">Panorama blur (whole image)</Label>
+              <Slider
+                min={0}
+                max={60}
+                value={templateConfig.bgImagePanoBlur}
+                onChange={(v) => {
+                  setTemplateConfig((c) => ({ ...c, bgImagePanoBlur: v }));
+                  markTemplateDirty();
+                }}
+              />
+              <Label className="mt-3">Panorama brightness (whole image)</Label>
+              <Slider
+                min={0}
+                max={1.5}
+                step={0.05}
+                value={templateConfig.bgImagePanoBrightness}
+                onChange={(v) => {
+                  setTemplateConfig((c) => ({ ...c, bgImagePanoBrightness: v }));
+                  markTemplateDirty();
+                }}
+              />
+            </>
+          )}
         </Section>
 
         <Section title={`Slot ${active.order}`}>
@@ -488,61 +547,71 @@ export function TemplateEditor({ template: initial }: { template: TemplatePayloa
             </div>
           )}
           <div className={hasBg ? "" : "opacity-40 pointer-events-none"}>
-            <Label>Pan X</Label>
-            <Slider
-              min={-1}
-              max={1}
-              step={0.05}
-              value={active.config.bgImagePan.x}
-              onChange={(v) =>
-                updateSlotConfig(active.id, {
-                  ...active.config,
-                  bgImagePan: { ...active.config.bgImagePan, x: v },
-                })
-              }
-            />
-            <Label className="mt-3">Pan Y</Label>
-            <Slider
-              min={-1}
-              max={1}
-              step={0.05}
-              value={active.config.bgImagePan.y}
-              onChange={(v) =>
-                updateSlotConfig(active.id, {
-                  ...active.config,
-                  bgImagePan: { ...active.config.bgImagePan, y: v },
-                })
-              }
-            />
-            <Label className="mt-3">Zoom</Label>
-            <Slider
-              min={1}
-              max={3}
-              step={0.1}
-              value={active.config.bgImageZoom}
-              onChange={(v) =>
-                updateSlotConfig(active.id, { ...active.config, bgImageZoom: v })
-              }
-            />
-            <Label className="mt-3">Blur (focus)</Label>
-            <Slider
-              min={0}
-              max={60}
-              value={active.config.bgImageBlur}
-              onChange={(v) =>
-                updateSlotConfig(active.id, { ...active.config, bgImageBlur: v })
-              }
-            />
-            <Label className="mt-3">Brightness</Label>
-            <Slider
-              min={0}
-              max={1.5}
-              step={0.05}
-              value={active.config.bgImageBrightness}
-              onChange={(v) =>
-                updateSlotConfig(active.id, { ...active.config, bgImageBrightness: v })
-              }
-            />
+            {templateConfig.bgImageMode === "panorama" ? (
+              <div className="text-[11px] text-zinc-500 leading-snug">
+                Per-slot framing is locked in panorama mode so adjacent slots stay continuous.
+                Use the <span className="font-medium">Panorama zoom / blur / brightness</span>{" "}
+                sliders in the Template section to adjust the whole panorama uniformly.
+              </div>
+            ) : (
+              <>
+                <Label>Pan X</Label>
+                <Slider
+                  min={-1}
+                  max={1}
+                  step={0.05}
+                  value={active.config.bgImagePan.x}
+                  onChange={(v) =>
+                    updateSlotConfig(active.id, {
+                      ...active.config,
+                      bgImagePan: { ...active.config.bgImagePan, x: v },
+                    })
+                  }
+                />
+                <Label className="mt-3">Pan Y</Label>
+                <Slider
+                  min={-1}
+                  max={1}
+                  step={0.05}
+                  value={active.config.bgImagePan.y}
+                  onChange={(v) =>
+                    updateSlotConfig(active.id, {
+                      ...active.config,
+                      bgImagePan: { ...active.config.bgImagePan, y: v },
+                    })
+                  }
+                />
+                <Label className="mt-3">Zoom</Label>
+                <Slider
+                  min={1}
+                  max={3}
+                  step={0.1}
+                  value={active.config.bgImageZoom}
+                  onChange={(v) =>
+                    updateSlotConfig(active.id, { ...active.config, bgImageZoom: v })
+                  }
+                />
+                <Label className="mt-3">Blur (focus)</Label>
+                <Slider
+                  min={0}
+                  max={60}
+                  value={active.config.bgImageBlur}
+                  onChange={(v) =>
+                    updateSlotConfig(active.id, { ...active.config, bgImageBlur: v })
+                  }
+                />
+                <Label className="mt-3">Brightness</Label>
+                <Slider
+                  min={0}
+                  max={1.5}
+                  step={0.05}
+                  value={active.config.bgImageBrightness}
+                  onChange={(v) =>
+                    updateSlotConfig(active.id, { ...active.config, bgImageBrightness: v })
+                  }
+                />
+              </>
+            )}
           </div>
         </Section>
 

@@ -55,6 +55,7 @@ export function ExportButton({
             template: templateConfig,
             slot: slot.config,
             slotNumber: slot.order,
+            totalSlots: slots.length,
             headline: slot.headline,
             subhead: slot.subhead,
             screenshotUrl: slot.screenshotUrl,

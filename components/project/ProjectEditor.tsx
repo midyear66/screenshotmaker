@@ -184,6 +184,7 @@ export function ProjectEditor({ project }: { project: ProjectPayload }) {
             key={s.order}
             slot={s}
             templateConfig={templateConfig}
+            totalSlots={totalCount}
             screenshotUrl={
               s.screen ? `/api/uploads/${s.screen.screenshotPath}` : null
             }
@@ -206,6 +207,7 @@ export function ProjectEditor({ project }: { project: ProjectPayload }) {
 function SlotCard({
   slot,
   templateConfig,
+  totalSlots,
   screenshotUrl,
   isFirst,
   isLast,
@@ -216,6 +218,7 @@ function SlotCard({
 }: {
   slot: SlotView;
   templateConfig: TemplateConfig;
+  totalSlots: number;
   screenshotUrl: string | null;
   isFirst: boolean;
   isLast: boolean;
@@ -263,6 +266,7 @@ function SlotCard({
         template={templateConfig}
         slot={slot.config}
         slotNumber={slot.order}
+        totalSlots={totalSlots}
         headline={slot.headline}
         subhead={slot.subhead}
         screenshotUrl={screenshotUrl}

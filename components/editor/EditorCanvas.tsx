@@ -17,6 +17,8 @@ type Props = {
   template: TemplateConfig;
   slot: SlotConfig;
   slotNumber: number;
+  /** Total slots in the template; used for panorama mode slicing. */
+  totalSlots: number;
   headline: string;
   subhead: string | null;
   screenshotUrl?: string | null;
@@ -31,6 +33,7 @@ export function EditorCanvas({
   template,
   slot,
   slotNumber,
+  totalSlots,
   headline,
   subhead,
   screenshotUrl,
@@ -70,11 +73,27 @@ export function EditorCanvas({
         bgImage,
         slot,
         fallbackColor,
+        panorama:
+          template.bgImageMode === "panorama"
+            ? {
+                slotIndex: slotNumber - 1,
+                totalSlots,
+                zoom: template.bgImagePanoZoom,
+                blur: template.bgImagePanoBlur,
+                brightness: template.bgImagePanoBrightness,
+              }
+            : undefined,
       }),
     [
       bgImage,
       slot,
       fallbackColor,
+      template.bgImageMode,
+      template.bgImagePanoZoom,
+      template.bgImagePanoBlur,
+      template.bgImagePanoBrightness,
+      slotNumber,
+      totalSlots,
     ]
   );
 
