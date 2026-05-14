@@ -9,29 +9,27 @@ One project = one app's screenshot set: visual design + screenshots + export, al
 ## What it does
 
 1. A **Project** is the unit of work — it owns the visual recipe **and** the screenshots:
-   - Configurable number of slots (one per screenshot in the final set; up to 10)
-   - Filmstrip view — see every slot at once while editing
-   - **Free-form text + icon elements** per slot (paint-program style): create / delete / move / rotate any number of text boxes and icons; resize via corner handles, rotate via the top handle, double-click text to edit in place
-   - **Text:** per-element font picker (~20 system families), bold + italic toggles, weight 400–800, color, alignment, rotation; box width auto-fits the typed content
-   - **Icons:** 12 built-in monoline icons + upload your own SVG files (per template) — colour, size, rotation, all work uniformly
-   - Background color **or** uploaded background image with two modes:
-     - **Single** — same image on every slot, per-slot pan / zoom / blur / brightness
-     - **Panorama** — image is split into N equal vertical bands so the slots side-by-side form one continuous backdrop; template-wide zoom / blur / brightness keep the panorama seamless
-   - Bezel color picker (black / graphite / grey / silver / custom) — side ribbon shade auto-derived
-   - **Bezel corner radius** slider (0–200 px) for sharp-rectangle to pill-shaped device frames
-   - Device tilt around **both** X and Y axes (real pseudo-3D perspective with visible side edges), plus Z-axis spin
-   - Device scale / position, all coordinates normalized 0–1 so layouts scale to multiple device sizes at export
+   - **Continuous wide canvas** of N "tiles" separated by a visible white gutter, App Store Connect–style. Each tile exports as one PNG.
+   - **Free-form elements on a single canvas** (paint-program style): text boxes, icons, and **device frames** are all first-class draggable / rotatable / resizable elements. Create as many as you want, position them anywhere.
+   - **Devices are tile-assigned.** Each device has an explicit `panelIndex` — dragging only moves the phone within its tile, never accidentally hops it to a neighbour. The device inspector has a **Tile** dropdown to reassign. Visually they hard-crop at the tile edge, so the App-Store "phone bridging two screens" look is achieved by dropping **one device per adjacent tile** and aligning them at the gap.
+   - **Screenshots are a pool, not slot-bound.** Upload screenshots to the project pool; attach any of them to any device via the device inspector. Multiple devices can share one screenshot.
+   - **Text:** per-element font picker (~20 system families), bold + italic toggles, weight 400–800, color, alignment, rotation; box width auto-fits the typed content. Double-click to edit in place.
+   - **Icons:** 12 built-in monoline icons + upload your own SVG files (per project) — colour, size, rotation, all work uniformly.
+   - **Background image** is cover-fit across the full canvas once and sliced contiguously — adjacent tiles' background pixels match exactly at the gap (no source pixels disappear behind the gutter). Template-wide zoom / blur / brightness.
+   - Bezel colour picker (black / graphite / grey / silver / custom) — side ribbon shade auto-derived.
+   - **Bezel corner radius** slider (0–200 px) for sharp-rectangle to pill-shaped device frames.
+   - Device tilt around **both** X and Y axes (real pseudo-3D perspective with visible side edges), plus Z-axis spin (-90° to +90°).
 
-2. **Screenshots are managed on the same page as the design.** Drag-and-drop multi-file upload (fills empty slots in order); per-slot replace / remove right under each filmstrip thumbnail.
+2. **Screenshots are managed on the same page as the design.** Drop files onto the screenshots panel → they join the pool; attach by clicking a thumbnail in the device inspector.
 
-3. **Export** renders every (slot × device-size) combination at native App Store pixel dimensions and bundles them into a ZIP:
+3. **Export** renders every (tile × device-size) combination at native App Store pixel dimensions and bundles them into a ZIP:
    ```
    <ProjectName>/
      iPhone-6.7/   01.png 02.png 03.png ...
      iPhone-6.5/   01.png 02.png 03.png ...
      iPad-13/      01.png 02.png 03.png ...
    ```
-   Each PNG is dimension-verified before being added to the zip.
+   Each PNG is exactly one tile's worth of canvas; Konva's stage bounds hard-clip elements that would have crossed a tile edge.
 
 ---
 
@@ -52,36 +50,36 @@ One project = one app's screenshot set: visual design + screenshots + export, al
 screenshotmaker/
 ├── app/
 │   ├── page.tsx                              # Project list (single home view)
-│   ├── projects/[id]/page.tsx                # Unified editor — visual + screenshots + export
+│   ├── projects/[id]/page.tsx                # Unified editor — runs migration helper, then renders
 │   ├── templates/[id]/page.tsx               # Legacy URL redirect → /projects/<id>
 │   └── api/
-│       ├── templates/                        # GET, POST, PATCH, DELETE
-│       ├── templates/[id]/slots/             # POST to add a slot
-│       ├── templates/[id]/background/        # POST + DELETE for bg image
-│       ├── slots/[id]/                       # PATCH (copy/config), DELETE
 │       ├── projects/                         # GET, POST, PATCH, DELETE
-│       ├── projects/[id]/screens/            # POST multipart (bulk or single-slot replace)
-│       ├── screens/[id]/                     # DELETE
-│       ├── screens/[id]/move/                # POST { direction: "up" | "down" }
+│       ├── projects/[id]/screenshots/        # POST (pool upload), DELETE /<screenshotId>
+│       ├── templates/[id]/background/        # POST + DELETE for bg image
+│       ├── templates/[id]/icons/             # POST (SVG upload), DELETE /<iconId>
+│       ├── projects/[id]/screens/            # Legacy (pre-canvas model) — kept for read-only migration
+│       ├── screens/[id]/                     # Legacy — DELETE
+│       ├── slots/[id]/                       # Legacy — PATCH/DELETE; no longer written by the editor
 │       └── uploads/[...path]/                # GET file (path-traversal protected)
 ├── components/
 │   ├── NewProjectButton / DeleteButton
 │   ├── editor/
-│   │   ├── TemplateEditor.tsx                # the unified editor — visual config + (in project context) drop zone, per-slot upload, export
-│   │   ├── EditorCanvas.tsx                  # react-konva Stage (dynamic, ssr:false)
+│   │   ├── TemplateEditor.tsx                # right-side inspector + project header + drop zone
+│   │   ├── EditorCanvas.tsx                  # react-konva Stage; per-tile clip groups; gap-aware bg
 │   │   ├── DeviceFrame.tsx                   # warped Konva.Image of the flat+tilted device canvas
 │   │   └── useImage.ts
 │   └── project/
-│       └── ExportButton.tsx                  # renders all (slot × device) → ZIP
+│       └── ExportButton.tsx                  # renders every (tile × device-size) → ZIP
 ├── lib/
 │   ├── db.ts                                 # Prisma client singleton
-│   ├── editor-types.ts                       # SlotConfig / TemplateConfig + parsers
+│   ├── editor-types.ts                       # TemplateConfig + CanvasElement + parsers + PANEL_W/H/GAP
+│   ├── projectMigration.ts                   # v0 → v1 (slot → canvas) and v1 → v2/v3 device shifts
 │   ├── deviceFrame.ts                        # vanilla canvas2D flat device-frame raster
 │   ├── perspective.ts                        # rounded-rect prism + triangle-subdivision warp
-│   ├── background.ts                         # bg canvas (image + pan/zoom/blur/brightness)
+│   ├── background.ts                         # cover-fit-once-then-slice bg canvas (gap-aware)
 │   ├── color.ts                              # scaleColor() helper
 │   ├── uploads.ts                            # safe upload-dir helpers
-│   └── render.ts                             # off-DOM export PNG renderer
+│   └── render.ts                             # off-DOM export PNG renderer (one tile per call)
 ├── prisma/
 │   ├── schema.prisma
 │   └── migrations/
@@ -101,7 +99,8 @@ The device and background are rendered through the **same code path** in both th
 2. **`computeTiltedDevice`** (`lib/perspective.ts`) — models the device as a rounded-rect prism with `depth = 70`. Samples the rounded perimeter (straights + corner arcs) and extrudes each sample backward, then projects every point through a perspective matrix that combines both X-axis and Y-axis rotations around the device's centre. Per-segment visibility (sign of the rotated outward normal's z-component) carves out only the side faces actually facing the viewer, producing a polygon ribbon that **wraps cleanly around the rounded corners**. Returns front-face quad, visible side quads, bounding box, and the pivot (so callers anchor on the device's true centre, not the bounding box).
 3. **`warpCanvasToQuad`** (`lib/perspective.ts`) — warps the flat device-frame raster onto the front-face quad via triangle subdivision (20 cells per side in the editor for smooth interaction, 60 for export).
 4. **`renderTiltedDevice`** — fills the side ribbon (auto-shade via `scaleColor(bezelColor, 0.6)`) then overlays the warped front face.
-5. **`renderBackgroundCanvas`** (`lib/background.ts`) — fills the solid color, then if a template-level bg image is set, applies `ctx.filter = "blur(...) brightness(...)"` and `drawImage` with cover-fit + per-slot pan/zoom.
+5. **`renderBackgroundCanvas`** (`lib/background.ts`) — fills the solid colour, then cover-fits the bg image **once** to the full canvas (`panelCount × PANEL_W`) and slices it into N contiguous bands. Tile N's band ends where tile N+1's band starts at the same source pixel, so the white gap acts as an opaque gutter without hiding any image pixels. Template-wide blur + brightness apply uniformly.
+6. **Per-tile clipping** — the editor wraps each tile's elements in a `Konva.Group` with `clipX/Y/Width/Height` set to the tile rect, so devices, text, and icons near a tile edge are hard-cropped at the gutter rather than spilling across. While an element is being dragged or transformed, its tile's clip is temporarily dropped so the node stays visible mid-interaction. The exporter doesn't need an explicit clip — its stage is exactly one tile wide.
 
 ---
 
@@ -109,41 +108,29 @@ The device and background are rendered through the **same code path** in both th
 
 ```prisma
 model Template {
-  // Implementation detail: every Project has exactly one Template (1:1 sidecar
-  // holding the visual config + slots). Templates are not surface area in the UI.
+  // 1:1 sidecar to Project. Holds the visual recipe in a JSON blob.
+  // Slot/Screen rows are retained pre-canvas-migration only — they're not
+  // written or read once `migrationVersion >= 1` is stamped on the config.
   id        String   @id
   name      String
-  slotCount Int
-  config    String   // JSON: TemplateConfig
-  slots     Slot[]
+  slotCount Int                         // legacy — becomes panelCount in TemplateConfig at migration time
+  config    String                      // JSON: TemplateConfig
+  slots     Slot[]                      // legacy
   projects  Project[]
-}
-
-model Slot {
-  id         String
-  templateId String
-  order      Int               // 1-based, unique per template
-  headline   String            // legacy; no longer read by the editor
-  subhead    String?           // legacy; no longer read by the editor
-  config     String            // JSON: SlotConfig (incl. elements[])
 }
 
 model Project {
   id         String
   name       String
   templateId String
-  screens    Screen[]
+  screens    Screen[]                   // legacy — read once by the migration helper
 }
 
-model Screen {
-  id             String
-  projectId      String
-  slotOrder      Int            // 1-based, unique per project
-  screenshotPath String         // relative to UPLOAD_DIR
-}
+model Slot   { ... }                    // legacy, see git history pre-canvas-model
+model Screen { ... }                    // legacy
 ```
 
-`TemplateConfig` and `SlotConfig` are JSON blobs inside the `config` columns; their shapes live in `lib/editor-types.ts`:
+`TemplateConfig` is the only thing the editor reads/writes after migration. Shapes live in `lib/editor-types.ts`:
 
 ```ts
 TemplateConfig = {
@@ -152,54 +139,50 @@ TemplateConfig = {
   bezelColor: string;                   // hex; side ribbon = scaleColor(bezelColor, 0.6)
   bezelCornerRadius: number;            // 0..200 px on 1290-wide canvas
   bgImagePath?: string;                 // relative to UPLOAD_DIR; timestamped per upload
-  bgImageMode: "single" | "panorama";
-  bgImagePanoZoom: number;              // 1..3, panorama mode
-  bgImagePanoBlur: number;              // 0..60 px, panorama mode
-  bgImagePanoBrightness: number;        // 0..1.5 multiplier, panorama mode
+  bgImageMode: "single" | "panorama";   // legacy parse-only — render always treats bg as one panorama
+  bgImagePanoZoom: number;              // 1..3
+  bgImagePanoBlur: number;              // 0..60 px
+  bgImagePanoBrightness: number;        // 0..1.5 multiplier
   customIcons: { id, name, path }[];    // user-uploaded SVG icons (path under UPLOAD_DIR)
+  panelCount: number;                   // number of tiles (= number of exported PNGs per device size)
+  elements: CanvasElement[];            // text + icon + device, all on the wide canvas
+  screenshots: ScreenshotAsset[];       // shared pool; DeviceElement.screenshotId references these
+  migrationVersion?: number;            // 1 = canvas model built, 3 = current
 }
 
-SlotConfig = {
-  devicePos: { x: 0..1, y: 0..1 };
-  deviceScale: number;
-  deviceRotation: number;               // Z-axis spin, degrees
-  deviceTiltX: number;                  // rotation around device's X axis (top tilt)
-  deviceTiltY: number;                  // rotation around device's Y axis (side lean)
-  backgroundColor?: string;             // optional solid-color slot override
-  bgImagePan: { x: -1..1, y: -1..1 };
-  bgImageZoom: number;                  // 1..3
-  bgImageBlur: number;                  // px in 1290-wide canvas space
-  bgImageBrightness: number;            // 0..1.5 multiplier
-  elements: SlotElement[];              // ordered text + icon overlay
-}
-
-SlotElement =
+CanvasElement =
   | TextElement {
-      type: "text";
-      id: string;
-      pos: { x, y };                    // normalized centre
-      width: number;                    // auto-fit to text content
+      type: "text"; id; pos: { x, y };  // pos.x in [0, panelCount]; pos.y in [0, 1]
+      width;                            // fraction of PANEL_W; auto-fits to text
       align: "left" | "center" | "right";
-      text: string;
-      fontSize: number;                 // px in 1290-wide canvas space
-      fontFamily?: string;              // optional per-element override
-      weight: 400..800;
-      italic: boolean;
-      color: string;
-      rotation: number;                 // degrees, around centre
+      text; fontSize; fontFamily?; weight: 400..800; italic; color; rotation;
     }
   | IconElement {
-      type: "icon";
-      id: string;
-      pos: { x, y };
-      size: number;                     // longest-edge px
+      type: "icon"; id; pos: { x, y };
+      size;                             // longest-edge px in 1290-wide canvas space
       icon: string;                     // built-in key OR `custom:<path>` for uploaded SVG
-      color: string;                    // applies to built-in icons; SVG uploads keep own colours
-      rotation: number;
+      color; rotation;
+    }
+  | DeviceElement {
+      type: "device"; id; pos: { x, y };
+      size;                             // fraction of PANEL_W (0.7 ≈ default)
+      rotation; tiltX; tiltY;
+      screenshotId?: string;            // references ScreenshotAsset.id in the project's pool
+      panelIndex?: number;              // authoritative tile assignment — drag never changes this
     };
+
+ScreenshotAsset = { id, path, uploadedAt };   // path is under UPLOAD_DIR
 ```
 
-`parseSlotConfig` merges parsed JSON over `DEFAULT_SLOT_CONFIG`, so existing slots without new fields auto-migrate to defaults at read time. Historic configs that used `deviceTiltX` for what's now `deviceTiltY` are also fixed up in the parser. Slots that pre-date the elements refactor open with an empty `elements` array (clean break — re-add text/icons from the inspector).
+### Migration
+
+`lib/projectMigration.ts` runs server-side on every project load and is idempotent. Steps stamped into `config.migrationVersion`:
+
+- **v0 → v1** — translate each `Slot.config.elements[]` (slot-local 0..1) into canvas-space (`pos.x` offset by slot index). Synthesise a `DeviceElement` per old slot from its `devicePos/deviceScale/deviceRotation/deviceTilt*`. Convert each `Screen` row into a `ScreenshotAsset` and attach by `slotOrder`.
+- **v1 → v2** — (historical) shift devices right by 0.2 panel-units to span panel boundaries. Superseded.
+- **v2 → v3** — undo the v2 shift. Once panels gained a visible gutter and elements became hard-clipped per tile, the v2 shift just wasted half of every device into the gap. v3 subtracts 0.2 from non-last-panel devices when the config was actually persisted at v2.
+
+New devices added in the editor write `panelIndex` explicitly. Legacy migrated devices have `panelIndex` undefined and fall back to `Math.floor(pos.x)` until the user interacts with them, at which point `panelIndex` is locked.
 
 ---
 
@@ -308,31 +291,39 @@ Sanity checks after move:
 
 ## End-to-end workflow
 
-1. **Create a project:** name + slot count → opens the unified editor.
-2. **Drop screenshots** into the drop zone above the filmstrip. They fill empty slots in upload order; per-slot `⟳` replace / `✕` remove buttons sit under each thumbnail.
-3. **Design in the same page:**
-   - The **filmstrip** shows every slot with its real screenshot once uploaded; click any thumbnail to make it the active full-size canvas.
-   - **Add text or icons** to the active slot with `+ Add text` / `+ Add icon`. Each element is independently draggable, rotatable (top handle), and resizable (corner handles). **Double-click text** to edit in place — the overlay textarea matches the rendered font/size/rotation.
+1. **Create a project:** name + tile count → opens the unified editor.
+2. **Upload screenshots** to the project's pool from the inspector. They appear as thumbnails; assign one to a device by selecting the device and clicking a thumbnail.
+3. **Design on the single wide canvas:**
+   - Add elements with `+ Add text` / `+ Add icon` / `+ Add device`. New devices land on the first empty tile by default.
+   - Each element is independently draggable, rotatable (top handle), and resizable (corner handles). Devices are clipped at their tile's edges; while you drag one the clip is dropped so you can see it pass over the gutter.
+   - **Tile** dropdown in the device inspector reassigns which tile a device renders inside; `pos.x` is shifted automatically so the device keeps the same relative position inside its new tile.
+   - **Double-click text** to edit in place — the overlay textarea matches the rendered font/size/rotation.
    - Per-text-element: font picker (~20 system families), Bold / Italic toggles, weight 400–800, colour, align, rotation slider. Width auto-fits to typed content.
    - Per-icon-element: pick from 12 built-ins, or **upload your own SVG** files (per project); set size, colour (built-ins), rotation.
-   - Tune device tilt (X axis = top/bottom edge, Y axis = side edge), rotation (Z-axis spin), scale.
+   - Tune device tilt (X axis = top/bottom edge, Y axis = side edge), Z-axis rotation (-90° to +90°), scale.
    - Pick a **bezel colour** preset / custom hue and a **bezel corner radius** (0 = sharp, 200 = pill).
-   - Upload a **background image**; per-slot sliders control pan / zoom / blur / brightness in single mode (template-wide sliders in panorama mode).
+   - Upload a **background image**; template-wide zoom / blur / brightness sliders apply to the panorama uniformly.
    - Changes autosave every 600ms.
-4. **Export ZIP** — button below the drop zone, disabled until every slot has a screenshot. Click → renders all `(slot × device-size)` combinations, packs into ZIP, downloads.
+4. **Export ZIP** — renders every `(tile × device-size)` combination, packs into ZIP, downloads.
+
+### Phone-bridging trick
+
+The App-Store split-phone effect (one phone visually spans two tiles with the gap cutting through the body) isn't a single-element behaviour — phones are tile-locked. Instead, add **two devices**: assign one to tile N, position it near the inside (right) edge; add a second, assign it to tile N+1, position it near its inside (left) edge with matching tilt / size. Each clips at its own tile's edge and the white gutter sits between them, matching App Store Connect's preview.
 
 ---
 
 ## Known limits / trade-offs
 
-- **iPad layout is naive.** Normalized coords are referenced to the iPhone 6.7 aspect (≈0.46). The iPad 13" canvas (≈0.75) renders the same layout, leaving large empty bands. Tweak each slot's device/text positions with iPad in mind, or skip iPad for now.
+- **iPad layout is naive.** Normalized coords are referenced to the iPhone 6.7 aspect (≈0.46). The iPad 13" canvas (≈0.75) renders the same layout, leaving large empty bands. Tweak positions with iPad in mind, or skip iPad for now.
 - **Stylized device frame**, not real Apple bezel PNGs. The pseudo-3D prism + rounded-corner ribbon reads as a phone but isn't pixel-accurate to any specific model. Notch is always black regardless of bezel colour (matches real iPhones).
 - **Fonts are OS-resolved system fonts.** The font picker lists ~20 cross-platform families; rendering depends on what the browser/container has installed. Custom font upload + web fonts (Google Fonts) aren't wired up yet.
 - **Custom SVG icons keep their own colours.** Multi-colour SVGs don't recolour from the inspector; the colour picker is a no-op for uploaded icons (built-in icons recolour as before).
 - **No undo/redo** in the editor — changes are autosaved live.
 - **No auth.** Anyone with network access to the port can use the app. Intended for LAN / Tailscale. Add basic auth middleware if exposing publicly.
 - **Perspective tilt is rounded-rect prism, not true 3D.** Looks correct for typical hero-shot angles (≤30°); extreme angles will show projection artefacts.
-- **Legacy `Slot.headline` / `Slot.subhead` columns** still exist in the DB schema but are no longer read or written — kept to avoid a Prisma migration. Safe to drop in a future schema cleanup.
+- **Phone-bridging is two-device manual alignment**, not single-element spanning — see the workflow note above.
+- **Devices are tile-locked.** Dragging never changes a device's tile assignment; use the inspector's Tile dropdown to move a device between tiles.
+- **Legacy `Slot`, `Screen`, and `Slot.headline/subhead` rows + columns** still exist in the DB schema. They're read once by `lib/projectMigration.ts` (v0 → v1) and then ignored. Safe to drop in a future schema cleanup once no project on the host predates v1.
 - **DB still has separate `Template` and `Project` tables** even though the UI presents them as one. They're a 1:1 sidecar. Orphan templates (without a project) are auto-promoted by creating a matching project on home-page load.
 
 ---
@@ -351,6 +342,7 @@ Built incrementally:
 8. **Free-form elements + paint-program direct manipulation** — replaced the fixed headline/subhead pair with an unbounded `elements: SlotElement[]` array of text boxes and icons. Konva `Transformer` gives every selected element corner-resize + rotate handles; double-click text opens an in-place HTML overlay editor matching the rendered font / size / rotation. Text boxes auto-fit their typed content (no manual wrap-width). Per-element font picker (~20 system fonts), Bold + Italic toggles, weight, colour, align, rotation.
 9. **Custom SVG icons + bezel corner radius** — upload your own SVG files per template (stored under `data/uploads/templates/<id>/icons/`), pick them from the same icon picker grid; new `TemplateConfig.bezelCornerRadius` slider (0–200 px) lets the device frame range from sharp rectangle to pill shape.
 10. **UI collapse: one project, one editor** — Template and Project were redundant in practice (you almost always make one project per template). The home page now lists Projects only; the project page hosts the full visual editor + drop zone + per-slot screenshot management + export on a single screen. DB schema is unchanged (Template still exists as a 1:1 sidecar); orphan templates from before the collapse get auto-promoted to projects on home load. Legacy `/templates/<id>` URLs redirect to their matching project.
+11. **Continuous-canvas model + tile-locked devices** — replaced the per-slot data model with a single wide canvas split into N "tiles" by a visible white gutter (matching App Store Connect's preview). All elements — text, icons, **and** devices — live on one `elements[]` array with panel-space coordinates. Screenshots become a project-wide pool referenced by `DeviceElement.screenshotId`. Per-tile `Konva.Group` clip rects hard-crop content at the gutter; the bg image is cover-fit once across the full canvas and sliced contiguously (no source pixels disappear behind the gap). A server-side migration (`lib/projectMigration.ts`) reshapes legacy per-slot data on first load and stamps `migrationVersion`. Devices carry an explicit `panelIndex` so dragging never accidentally re-assigns the device to a neighbouring tile — the inspector's Tile dropdown is the only way to move one between tiles.
 
 ---
 

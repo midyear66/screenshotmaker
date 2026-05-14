@@ -5,17 +5,17 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import {
+  CanvasElement,
   CUSTOM_ICON_PREFIX,
   CustomIcon,
-  DEFAULT_SLOT_CONFIG,
+  DeviceElement,
+  defaultDeviceElement,
+  defaultHeadlineElement,
   defaultIconElement,
   defaultTextElement,
   IconElement,
   isCustomIcon,
-  parseSlotConfig,
   parseTemplateConfig,
-  SlotConfig,
-  SlotElement,
   TemplateConfig,
   TextElement,
 } from "@/lib/editor-types";
@@ -29,36 +29,15 @@ const EditorCanvas = dynamic(
   { ssr: false }
 );
 
-export type SlotPayload = {
-  id: string;
-  order: number;
-  config: string;
-};
-
 export type TemplatePayload = {
   id: string;
   name: string;
-  slotCount: number;
   config: string;
-  slots: SlotPayload[];
-};
-
-export type ScreenPayload = {
-  id: string;
-  slotOrder: number;
-  screenshotPath: string;
 };
 
 export type ProjectContext = {
   projectId: string;
   projectName: string;
-  screens: ScreenPayload[];
-};
-
-type SlotState = {
-  id: string;
-  order: number;
-  config: SlotConfig;
 };
 
 export function TemplateEditor({
@@ -66,12 +45,7 @@ export function TemplateEditor({
   project,
 }: {
   template: TemplatePayload;
-  /**
-   * When supplied, the editor also renders screenshot management UI
-   * (drop zone, per-slot upload, export). When omitted, it's a pure
-   * template editor with placeholder canvases.
-   */
-  project?: ProjectContext;
+  project: ProjectContext;
 }) {
   const router = useRouter();
 
@@ -79,184 +53,140 @@ export function TemplateEditor({
     parseTemplateConfig(initial.config)
   );
   const [templateName, setTemplateName] = useState(initial.name);
-  const [slots, setSlots] = useState<SlotState[]>(() =>
-    initial.slots.map((s) => ({
-      id: s.id,
-      order: s.order,
-      config: parseSlotConfig(s.config),
-    }))
-  );
-  const [activeIdx, setActiveIdx] = useState(0);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploadingBg, setUploadingBg] = useState(false);
+  const [uploadingScreenshot, setUploadingScreenshot] = useState(false);
   const bgFileInput = useRef<HTMLInputElement>(null);
+  const screenshotFileInput = useRef<HTMLInputElement>(null);
 
-  const active = slots[activeIdx];
-  const selectedElement =
-    active?.config.elements.find((el) => el.id === selectedElementId) ?? null;
-
-  // Clear selection when switching slots so we don't reference a stale id.
-  useEffect(() => {
-    setSelectedElementId(null);
-  }, [activeIdx]);
+  const selectedElement = templateConfig.elements.find((el) => el.id === selectedElementId) ?? null;
 
   // ---- Autosave ----
 
-  const dirtySlotIds = useRef<Set<string>>(new Set());
   const templateDirty = useRef(false);
 
   const flushSaves = useDebouncedCallback(async () => {
-    setSaving(true);
-    const slotIds = Array.from(dirtySlotIds.current);
-    dirtySlotIds.current.clear();
-    const wasTemplateDirty = templateDirty.current;
+    if (!templateDirty.current) return;
     templateDirty.current = false;
-
-    const tasks: Promise<unknown>[] = [];
-    if (wasTemplateDirty) {
-      tasks.push(
-        fetch(`/api/templates/${initial.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: templateName, config: templateConfig }),
-        })
-      );
-    }
-    for (const id of slotIds) {
-      const s = slots.find((x) => x.id === id);
-      if (!s) continue;
-      tasks.push(
-        fetch(`/api/slots/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ config: s.config }),
-        })
-      );
-    }
-    await Promise.all(tasks);
+    setSaving(true);
+    await fetch(`/api/templates/${initial.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: templateName, config: templateConfig }),
+    });
     setSaving(false);
   }, 600);
 
-  function markSlotDirty(id: string) {
-    dirtySlotIds.current.add(id);
-    flushSaves();
-  }
-  function markTemplateDirty() {
+  function markDirty() {
     templateDirty.current = true;
     flushSaves();
   }
 
-  // ---- Slot mutators ----
-
-  function updateSlotConfig(id: string, next: SlotConfig) {
-    setSlots((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, config: next } : s))
-    );
-    markSlotDirty(id);
+  // Persist any config change (set via setTemplateConfig).
+  function updateConfig(updater: (c: TemplateConfig) => TemplateConfig) {
+    setTemplateConfig((c) => {
+      const next = updater(c);
+      return next;
+    });
+    markDirty();
   }
 
-  // ---- Element mutators (operate on the active slot) ----
+  // ---- Element CRUD ----
 
-  function patchElement(elementId: string, patch: Partial<SlotElement>) {
-    if (!active) return;
-    const elements = active.config.elements.map((el) =>
-      el.id === elementId ? ({ ...el, ...patch } as SlotElement) : el
-    );
-    updateSlotConfig(active.id, { ...active.config, elements });
+  function patchElement(id: string, patch: Partial<CanvasElement>) {
+    updateConfig((c) => ({
+      ...c,
+      elements: c.elements.map((el) =>
+        el.id === id ? ({ ...el, ...patch } as CanvasElement) : el
+      ),
+    }));
   }
 
-  /**
-   * Patch a TextElement and recompute `width` so the block continues to hug
-   * its content. Used for inspector edits that affect rendered text width
-   * (text content / font size / weight / italic / fontFamily).
-   */
-  function patchTextWithReflow(elementId: string, patch: Partial<TextElement>) {
-    if (!active) return;
-    const current = active.config.elements.find((el) => el.id === elementId);
+  function patchTextWithReflow(id: string, patch: Partial<TextElement>) {
+    const current = templateConfig.elements.find((el) => el.id === id);
     if (!current || current.type !== "text") return;
-    const next: TextElement = { ...current, ...patch };
+    const next = { ...current, ...patch } as TextElement;
     const width = autoWidth(next.text, {
       fontSize: next.fontSize,
       fontFamily: next.fontFamily ?? templateConfig.fontFamily,
       weight: next.weight,
       italic: next.italic,
     });
-    patchElement(elementId, { ...patch, width });
+    patchElement(id, { ...patch, width });
+  }
+
+  function addElement(el: CanvasElement) {
+    updateConfig((c) => ({ ...c, elements: [...c.elements, el] }));
+    setSelectedElementId(el.id);
   }
 
   function addTextElement() {
-    if (!active) return;
-    const el = defaultTextElement("Text");
-    updateSlotConfig(active.id, {
-      ...active.config,
-      elements: [...active.config.elements, el],
-    });
-    setSelectedElementId(el.id);
+    // Drop in the middle of the canvas's first panel.
+    const el = defaultHeadlineElement("Text");
+    el.pos = { x: 0.5, y: 0.12 };
+    addElement(el);
   }
 
   function addIconElement(iconKey: string) {
-    if (!active) return;
     const el = defaultIconElement(iconKey);
-    updateSlotConfig(active.id, {
-      ...active.config,
-      elements: [...active.config.elements, el],
+    addElement(el);
+  }
+
+  function addDeviceElement() {
+    // Drop in the centre of the first empty panel if any, else panel 1.
+    const usedPanels = new Set<number>();
+    for (const el of templateConfig.elements) {
+      if (el.type === "device") usedPanels.add(Math.floor(el.pos.x));
+    }
+    let panelIdx = 0;
+    for (let i = 0; i < templateConfig.panelCount; i++) {
+      if (!usedPanels.has(i)) {
+        panelIdx = i;
+        break;
+      }
+    }
+    const el = defaultDeviceElement(panelIdx);
+    addElement(el);
+  }
+
+  function removeElement(id: string) {
+    updateConfig((c) => ({
+      ...c,
+      elements: c.elements.filter((el) => el.id !== id),
+    }));
+    if (selectedElementId === id) setSelectedElementId(null);
+  }
+
+  function moveElement(id: string, direction: -1 | 1) {
+    updateConfig((c) => {
+      const idx = c.elements.findIndex((e) => e.id === id);
+      if (idx < 0) return c;
+      const target = idx + direction;
+      if (target < 0 || target >= c.elements.length) return c;
+      const next = c.elements.slice();
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return { ...c, elements: next };
     });
-    setSelectedElementId(el.id);
   }
 
-  function removeElement(elementId: string) {
-    if (!active) return;
-    updateSlotConfig(active.id, {
-      ...active.config,
-      elements: active.config.elements.filter((el) => el.id !== elementId),
-    });
-    if (selectedElementId === elementId) setSelectedElementId(null);
+  // ---- Panels ----
+
+  function setPanelCount(n: number) {
+    const next = Math.max(1, Math.min(10, n));
+    updateConfig((c) => ({ ...c, panelCount: next }));
   }
 
-  function moveElement(elementId: string, direction: -1 | 1) {
-    if (!active) return;
-    const idx = active.config.elements.findIndex((el) => el.id === elementId);
-    if (idx < 0) return;
-    const target = idx + direction;
-    if (target < 0 || target >= active.config.elements.length) return;
-    const next = active.config.elements.slice();
-    [next[idx], next[target]] = [next[target], next[idx]];
-    updateSlotConfig(active.id, { ...active.config, elements: next });
+  function addPanel() {
+    setPanelCount(templateConfig.panelCount + 1);
   }
 
-  // ---- Slot CRUD ----
-
-  async function addSlot() {
-    const res = await fetch(`/api/templates/${initial.id}/slots`, {
-      method: "POST",
-    });
-    if (!res.ok) return;
-    const slot = await res.json();
-    setSlots((prev) => [
-      ...prev,
-      {
-        id: slot.id,
-        order: slot.order,
-        config: parseSlotConfig(slot.config),
-      },
-    ]);
-    setActiveIdx(slots.length);
+  function removePanel() {
+    if (templateConfig.panelCount <= 1) return;
+    setPanelCount(templateConfig.panelCount - 1);
   }
 
-  async function removeSlot() {
-    if (slots.length <= 1) return;
-    if (!confirm(`Delete slot ${active.order}? This can't be undone.`)) return;
-    const res = await fetch(`/api/slots/${active.id}`, { method: "DELETE" });
-    if (!res.ok) return;
-    setSlots((prev) => {
-      const next = prev.filter((s) => s.id !== active.id);
-      return next.map((s, i) => ({ ...s, order: i + 1 }));
-    });
-    setActiveIdx((idx) => Math.max(0, idx - 1));
-  }
-
-  // ---- Background image upload / remove ----
+  // ---- Background image ----
 
   async function uploadBg(file: File) {
     setUploadingBg(true);
@@ -270,11 +200,8 @@ export function TemplateEditor({
     if (res.ok) {
       const json = await res.json();
       setTemplateConfig((c) => ({ ...c, bgImagePath: json.bgImagePath }));
-    } else {
-      alert("Upload failed");
-    }
+    } else alert("Upload failed");
   }
-
   async function removeBg() {
     if (!confirm("Remove background image?")) return;
     const res = await fetch(`/api/templates/${initial.id}/background`, {
@@ -289,7 +216,7 @@ export function TemplateEditor({
     }
   }
 
-  // ---- Custom SVG icon upload / remove ----
+  // ---- Custom SVG icons ----
 
   async function uploadCustomIcon(file: File) {
     if (!file.name.toLowerCase().endsWith(".svg") && file.type !== "image/svg+xml") {
@@ -307,98 +234,65 @@ export function TemplateEditor({
       return;
     }
     const icon = await res.json();
-    setTemplateConfig((c) => ({
-      ...c,
-      customIcons: [...c.customIcons, icon],
-    }));
+    setTemplateConfig((c) => ({ ...c, customIcons: [...c.customIcons, icon] }));
   }
-
   async function removeCustomIcon(iconId: string) {
-    if (!confirm("Delete this custom icon? It will be removed from any slots using it.")) {
+    if (!confirm("Delete this custom icon? It will be removed from any elements using it."))
       return;
-    }
     const res = await fetch(`/api/templates/${initial.id}/icons/${iconId}`, {
       method: "DELETE",
     });
     if (!res.ok) return;
-    // Remove from local templateConfig + scrub any slot elements that referenced it.
     setTemplateConfig((c) => ({
       ...c,
       customIcons: c.customIcons.filter((i) => i.id !== iconId),
     }));
-    // We don't auto-scrub slot.elements that referenced this icon — the
-    // canvas will simply render nothing for them (image fails to load). The
-    // user can delete those elements via the inspector list.
   }
 
-  // ---- Screenshot upload / remove / move (only when project context exists) ----
+  // ---- Screenshots pool ----
 
-  const screensByOrder = useMemo(() => {
-    const m = new Map<number, ScreenPayload>();
-    if (project) {
-      for (const s of project.screens) m.set(s.slotOrder, s);
-    }
-    return m;
-  }, [project]);
-
-  const filledScreenCount = project?.screens.length ?? 0;
-  const isReady = !!project && filledScreenCount === slots.length;
-
-  const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const slotFileInput = useRef<HTMLInputElement>(null);
-  const replaceTargetSlot = useRef<number | null>(null);
-
-  async function uploadFiles(files: FileList | File[]) {
-    if (!project) return;
-    if (files.length === 0) return;
-    setUploading(true);
-    const fd = new FormData();
-    for (const f of Array.from(files)) fd.append("file", f);
-    const res = await fetch(`/api/projects/${project.projectId}/screens`, {
-      method: "POST",
-      body: fd,
-    });
-    setUploading(false);
-    if (res.ok) router.refresh();
-    else alert("Upload failed");
-  }
-
-  async function replaceSlotScreenshot(slotOrder: number, file: File) {
-    if (!project) return;
-    setUploading(true);
+  async function uploadScreenshot(file: File): Promise<string | null> {
+    setUploadingScreenshot(true);
     const fd = new FormData();
     fd.append("file", file);
-    fd.append("slotOrder", String(slotOrder));
-    const res = await fetch(`/api/projects/${project.projectId}/screens`, {
+    const res = await fetch(`/api/projects/${project.projectId}/screenshots`, {
       method: "POST",
       body: fd,
     });
-    setUploading(false);
-    if (res.ok) router.refresh();
-    else alert("Upload failed");
+    setUploadingScreenshot(false);
+    if (!res.ok) {
+      alert("Screenshot upload failed");
+      return null;
+    }
+    const asset = await res.json();
+    setTemplateConfig((c) => ({ ...c, screenshots: [...c.screenshots, asset] }));
+    return asset.id as string;
+  }
+  async function deleteScreenshot(screenshotId: string) {
+    if (!confirm("Delete this screenshot? Any device using it will lose its image."))
+      return;
+    const res = await fetch(
+      `/api/projects/${project.projectId}/screenshots/${screenshotId}`,
+      { method: "DELETE" }
+    );
+    if (!res.ok) return;
+    setTemplateConfig((c) => ({
+      ...c,
+      screenshots: c.screenshots.filter((s) => s.id !== screenshotId),
+      elements: c.elements.map((el) =>
+        el.type === "device" && el.screenshotId === screenshotId
+          ? { ...el, screenshotId: undefined }
+          : el
+      ),
+    }));
   }
 
-  async function deleteScreen(screenId: string) {
-    if (!confirm("Remove this screenshot?")) return;
-    const res = await fetch(`/api/screens/${screenId}`, { method: "DELETE" });
-    if (res.ok) router.refresh();
-  }
-
-  function onDropZoneDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setDragging(false);
-    if (e.dataTransfer.files.length > 0) uploadFiles(e.dataTransfer.files);
-  }
-
-  // ---- Flush on unmount / nav away ----
+  // Flush on unmount.
   useEffect(() => {
-    const onBeforeUnload = () => {
-      flushSaves.flush();
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
+    const handler = () => flushSaves.flush();
+    window.addEventListener("beforeunload", handler);
     return () => {
-      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("beforeunload", handler);
       flushSaves.flush();
     };
   }, [flushSaves]);
@@ -407,215 +301,117 @@ export function TemplateEditor({
     () => ["#1d4ed8", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#a855f7", "#111827"],
     []
   );
-
   const hasBg = !!templateConfig.bgImagePath;
   const bgThumbUrl = templateConfig.bgImagePath
     ? `/api/uploads/${templateConfig.bgImagePath}`
     : null;
 
-  // Project export payload for ExportButton (when in project context).
-  const exportPayload = project
-    ? {
-        id: project.projectId,
-        name: project.projectName,
-        template: {
-          id: initial.id,
-          name: templateName,
-          slotCount: slots.length,
-          config: JSON.stringify(templateConfig),
-          slots: slots.map((s) => ({
-            id: s.id,
-            order: s.order,
-            config: JSON.stringify(s.config),
-          })),
-        },
-        screens: project.screens,
-      }
-    : null;
+  // Informational only — panels in the free-form model don't *need* a device
+  // (the user might export panels with just bg + text + icons). Export is
+  // always enabled.
+  const devicesWithScreenshots = useMemo(
+    () =>
+      templateConfig.elements.filter(
+        (el) => el.type === "device" && el.screenshotId
+      ).length,
+    [templateConfig.elements]
+  );
+  const isReady = templateConfig.panelCount > 0;
+
+  // Build a minimal ProjectPayload for ExportButton.
+  const exportPayload = useMemo(
+    () => ({
+      id: project.projectId,
+      name: project.projectName,
+      template: {
+        id: initial.id,
+        name: templateName,
+        slotCount: templateConfig.panelCount, // legacy field; ExportButton's type only reads .slots
+        config: JSON.stringify(templateConfig),
+        slots: [], // panels live inside config.elements now
+      },
+      screens: [], // legacy; renderPanelToBlob reads from templateConfig.screenshots
+    }),
+    [project.projectId, project.projectName, initial.id, templateName, templateConfig]
+  );
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
-      {/* ---- Left column ---- */}
+      {/* ---- Canvas + top toolbar ---- */}
       <div className="flex flex-col items-stretch">
-        {/* Screenshot toolbar (only in project context) */}
-        {project && (
-          <>
-            <input
-              ref={slotFileInput}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                const slot = replaceTargetSlot.current;
-                if (file && slot != null) replaceSlotScreenshot(slot, file);
-                e.target.value = "";
-              }}
-            />
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={onDropZoneDrop}
-              className={`rounded-lg border-2 border-dashed p-3 text-center mb-4 transition-colors ${
-                dragging
-                  ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
-                  : "border-zinc-300 dark:border-zinc-700"
-              }`}
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={addTextElement}
+              className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
-              <p className="text-xs text-zinc-600 dark:text-zinc-400">
-                Drop screenshots to fill empty slots, or{" "}
-                <label className="underline cursor-pointer">
-                  choose files
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => e.target.files && uploadFiles(e.target.files)}
-                  />
-                </label>
-                .
-              </p>
-              <p className="text-[11px] text-zinc-500 mt-0.5">
-                {uploading ? "Uploading…" : `${filledScreenCount} / ${slots.length} screens filled`}
-                {isReady && " · ready to export"}
-              </p>
-            </div>
-            <div className="mb-4 flex items-center justify-end">
-              {exportPayload && <ExportButton project={exportPayload} ready={isReady} />}
-            </div>
-          </>
-        )}
-
-        {/* Filmstrip */}
-        <div className="mb-4 flex gap-2 overflow-x-auto pb-2 -mx-2 px-2">
-          {slots.map((s, i) => {
-            const isActive = i === activeIdx;
-            const screen = screensByOrder.get(s.order);
-            const screenshotUrl = screen ? `/api/uploads/${screen.screenshotPath}` : undefined;
-            return (
-              <div key={s.id} className="shrink-0 flex flex-col items-center gap-1">
-                <button
-                  onClick={() => setActiveIdx(i)}
-                  className={`rounded-lg p-1 border ${
-                    isActive
-                      ? "border-blue-500 ring-2 ring-blue-500"
-                      : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
-                  }`}
-                  title={`Slot ${s.order}`}
-                >
-                  <div style={{ width: 110 }}>
-                    <EditorCanvas
-                      template={templateConfig}
-                      slot={s.config}
-                      slotNumber={s.order}
-                      totalSlots={slots.length}
-                      screenshotUrl={screenshotUrl}
-                      readOnly
-                      maxWidthClass=""
-                      tiltSubdivisions={12}
-                    />
-                  </div>
-                </button>
-                <div className="flex items-center gap-1 text-[10px] text-zinc-500">
-                  <span>{s.order}</span>
-                  {project && (
-                    <>
-                      <button
-                        onClick={() => {
-                          replaceTargetSlot.current = s.order;
-                          slotFileInput.current?.click();
-                        }}
-                        title={screen ? "Replace screenshot" : "Upload screenshot"}
-                        className="px-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                      >
-                        {screen ? "⟳" : "↑"}
-                      </button>
-                      {screen && (
-                        <button
-                          onClick={() => deleteScreen(screen.id)}
-                          title="Remove screenshot"
-                          className="px-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-red-600"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+              + Text
+            </button>
+            <IconPicker
+              onPick={addIconElement}
+              customIcons={templateConfig.customIcons}
+              onUploadCustom={uploadCustomIcon}
+              onDeleteCustom={removeCustomIcon}
+            />
+            <button
+              onClick={addDeviceElement}
+              className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              + Device
+            </button>
+            <span className="ml-2 text-xs text-zinc-500">
+              {templateConfig.panelCount} panel{templateConfig.panelCount === 1 ? "" : "s"}
+              {devicesWithScreenshots > 0 &&
+                ` · ${devicesWithScreenshots} device${devicesWithScreenshots === 1 ? "" : "s"} with screenshot`}
+            </span>
+          </div>
+          <ExportButton project={exportPayload} ready={isReady} />
         </div>
 
-        {/* Main editable canvas */}
-        <div className="flex flex-col items-center">
-          <EditorCanvas
-            template={templateConfig}
-            slot={active.config}
-            slotNumber={active.order}
-            totalSlots={slots.length}
-            screenshotUrl={
-              project
-                ? (() => {
-                    const screen = screensByOrder.get(active.order);
-                    return screen ? `/api/uploads/${screen.screenshotPath}` : undefined;
-                  })()
-                : undefined
-            }
-            selectedElementId={selectedElementId}
-            onChange={(next) => updateSlotConfig(active.id, next)}
-            onSelectElement={setSelectedElementId}
-          />
+        <EditorCanvas
+          template={templateConfig}
+          screenshots={templateConfig.screenshots}
+          selectedElementId={selectedElementId}
+          onChange={(next) => {
+            setTemplateConfig(next);
+            markDirty();
+          }}
+          onSelectElement={setSelectedElementId}
+          maxWidthClass="max-w-full"
+        />
 
-          {/* Slot nav */}
-          <div className="mt-6 flex items-center gap-2">
-            <button
-              onClick={() => setActiveIdx((i) => Math.max(0, i - 1))}
-              disabled={activeIdx === 0}
-              className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
-            >
-              ←
-            </button>
-            <span className="text-sm tabular-nums px-2">
-              Slot {active.order} of {slots.length}
-            </span>
-            <button
-              onClick={() => setActiveIdx((i) => Math.min(slots.length - 1, i + 1))}
-              disabled={activeIdx === slots.length - 1}
-              className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
-            >
-              →
-            </button>
-            <button
-              onClick={addSlot}
-              className="ml-2 px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            >
-              + Add
-            </button>
-            <button
-              onClick={removeSlot}
-              disabled={slots.length <= 1}
-              className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            >
-              − Remove
-            </button>
-          </div>
+        {/* Panel count controls */}
+        <div className="mt-4 flex items-center gap-2">
+          <span className="text-sm text-zinc-500">Panels:</span>
+          <button
+            onClick={removePanel}
+            disabled={templateConfig.panelCount <= 1}
+            className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
+          >
+            −
+          </button>
+          <span className="text-sm tabular-nums w-6 text-center">
+            {templateConfig.panelCount}
+          </span>
+          <button
+            onClick={addPanel}
+            disabled={templateConfig.panelCount >= 10}
+            className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
+          >
+            +
+          </button>
         </div>
       </div>
 
       {/* ---- Inspector ---- */}
       <aside className="space-y-6">
-        <Section title="Template">
+        <Section title="Project">
           <Label>Name</Label>
           <input
             value={templateName}
             onChange={(e) => {
               setTemplateName(e.target.value);
-              markTemplateDirty();
+              markDirty();
             }}
             onBlur={() => router.refresh()}
             className="input"
@@ -624,20 +420,16 @@ export function TemplateEditor({
           <Label className="mt-3">Default background color</Label>
           <ColorRow
             value={templateConfig.backgroundColor}
-            onChange={(v) => {
-              setTemplateConfig((c) => ({ ...c, backgroundColor: v }));
-              markTemplateDirty();
-            }}
+            onChange={(v) =>
+              updateConfig((c) => ({ ...c, backgroundColor: v }))
+            }
             palette={palette}
           />
 
           <Label className="mt-3">Bezel color</Label>
           <ColorRow
             value={templateConfig.bezelColor}
-            onChange={(v) => {
-              setTemplateConfig((c) => ({ ...c, bezelColor: v }));
-              markTemplateDirty();
-            }}
+            onChange={(v) => updateConfig((c) => ({ ...c, bezelColor: v }))}
             palette={["#1f1f1f", "#3f3f46", "#6b6b6b", "#c4c4c4", "#e8e8e8", "#1e3a8a"]}
           />
 
@@ -647,10 +439,9 @@ export function TemplateEditor({
             max={200}
             step={2}
             value={Math.round(templateConfig.bezelCornerRadius)}
-            onChange={(v) => {
-              setTemplateConfig((c) => ({ ...c, bezelCornerRadius: v }));
-              markTemplateDirty();
-            }}
+            onChange={(v) =>
+              updateConfig((c) => ({ ...c, bezelCornerRadius: v }))
+            }
           />
 
           <Label className="mt-3">Background image</Label>
@@ -688,79 +479,75 @@ export function TemplateEditor({
               </button>
             )}
           </div>
+          <p className="text-[11px] text-zinc-500 mt-1 leading-snug">
+            Bg image spans all {templateConfig.panelCount} panel
+            {templateConfig.panelCount === 1 ? "" : "s"}; each export PNG gets
+            its slice.
+          </p>
+        </Section>
 
-          <Label className="mt-3">Background mode</Label>
-          <select
-            value={templateConfig.bgImageMode}
+        <Section title="Screenshots pool">
+          <input
+            ref={screenshotFileInput}
+            type="file"
+            accept="image/*"
+            className="hidden"
             onChange={(e) => {
-              setTemplateConfig((c) => ({
-                ...c,
-                bgImageMode: e.target.value as "single" | "panorama",
-              }));
-              markTemplateDirty();
+              const file = e.target.files?.[0];
+              if (file) uploadScreenshot(file);
+              e.target.value = "";
             }}
-            className="input"
+          />
+          <button
+            onClick={() => screenshotFileInput.current?.click()}
+            disabled={uploadingScreenshot}
+            className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 mb-2"
           >
-            <option value="single">Single — same image on every slot</option>
-            <option value="panorama">Panorama — image spans all slots</option>
-          </select>
-          {templateConfig.bgImageMode === "panorama" && (
-            <>
-              <p className="text-[11px] text-zinc-500 mt-1 leading-snug">
-                Image is split into {slots.length} equal vertical bands; slot N gets band N.
-                Per-slot pan is ignored — recommended source width ≈{" "}
-                {1290 * slots.length}px (≈ 1290 × slot count) for crisp output.
-              </p>
-              <Label className="mt-3">Panorama zoom (whole image)</Label>
-              <Slider
-                min={1}
-                max={3}
-                step={0.05}
-                value={templateConfig.bgImagePanoZoom}
-                onChange={(v) => {
-                  setTemplateConfig((c) => ({ ...c, bgImagePanoZoom: v }));
-                  markTemplateDirty();
-                }}
-              />
-              <Label className="mt-3">Panorama blur (whole image)</Label>
-              <Slider
-                min={0}
-                max={60}
-                value={templateConfig.bgImagePanoBlur}
-                onChange={(v) => {
-                  setTemplateConfig((c) => ({ ...c, bgImagePanoBlur: v }));
-                  markTemplateDirty();
-                }}
-              />
-              <Label className="mt-3">Panorama brightness (whole image)</Label>
-              <Slider
-                min={0}
-                max={1.5}
-                step={0.05}
-                value={templateConfig.bgImagePanoBrightness}
-                onChange={(v) => {
-                  setTemplateConfig((c) => ({ ...c, bgImagePanoBrightness: v }));
-                  markTemplateDirty();
-                }}
-              />
-            </>
+            {uploadingScreenshot ? "Uploading…" : "+ Upload screenshot"}
+          </button>
+          {templateConfig.screenshots.length === 0 ? (
+            <div className="text-xs text-zinc-500">
+              No screenshots yet. Upload one to attach to any device.
+            </div>
+          ) : (
+            <div className="grid grid-cols-4 gap-1">
+              {templateConfig.screenshots.map((s) => (
+                <div key={s.id} className="relative group">
+                  <div
+                    className="aspect-[1/2] rounded border border-zinc-300 dark:border-zinc-700 bg-cover bg-center bg-zinc-50 dark:bg-zinc-800"
+                    style={{ backgroundImage: `url("/api/uploads/${s.path}")` }}
+                    title={s.id}
+                  />
+                  <button
+                    onClick={() => deleteScreenshot(s.id)}
+                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-zinc-900 text-white text-[9px] leading-none opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Delete"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
         </Section>
 
-        {/* ---- Elements (text + icons) ---- */}
-        <Section title={`Slot ${active.order} elements`}>
-          {active.config.elements.length === 0 ? (
-            <div className="text-xs text-zinc-500 mb-3">
-              No elements yet. Add text or an icon below.
+        <Section title="Elements">
+          {templateConfig.elements.length === 0 ? (
+            <div className="text-xs text-zinc-500">
+              No elements yet. Use + Text / + Icon / + Device above.
             </div>
           ) : (
             <ul className="space-y-1 mb-3">
-              {active.config.elements.map((el, i) => {
+              {templateConfig.elements.map((el, i) => {
                 const isSel = el.id === selectedElementId;
+                const glyph =
+                  el.type === "text" ? "T" : el.type === "icon" ? "★" : "⌖";
                 const label =
                   el.type === "text"
-                    ? `T  ${el.text || "(empty)"}`
-                    : `★  ${el.icon}`;
+                    ? el.text || "(empty)"
+                    : el.type === "icon"
+                    ? el.icon
+                    : "device";
                 return (
                   <li
                     key={el.id}
@@ -774,33 +561,29 @@ export function TemplateEditor({
                       onClick={() => setSelectedElementId(el.id)}
                       className="flex-1 text-left truncate"
                     >
-                      <span className="font-mono text-zinc-500 mr-1">
-                        {el.type === "text" ? "T" : "★"}
-                      </span>
-                      {el.type === "text"
-                        ? el.text || "(empty text)"
-                        : el.icon}
+                      <span className="font-mono text-zinc-500 mr-1">{glyph}</span>
+                      {label}
                     </button>
                     <button
                       onClick={() => moveElement(el.id, -1)}
                       disabled={i === 0}
-                      title="Move down (back)"
                       className="px-1 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-30"
+                      title="Send back"
                     >
                       ↓
                     </button>
                     <button
                       onClick={() => moveElement(el.id, 1)}
-                      disabled={i === active.config.elements.length - 1}
-                      title="Move up (front)"
+                      disabled={i === templateConfig.elements.length - 1}
                       className="px-1 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-30"
+                      title="Bring forward"
                     >
                       ↑
                     </button>
                     <button
                       onClick={() => removeElement(el.id)}
-                      title="Delete"
                       className="px-1 text-zinc-400 hover:text-red-600"
+                      title="Delete"
                     >
                       ✕
                     </button>
@@ -809,21 +592,6 @@ export function TemplateEditor({
               })}
             </ul>
           )}
-
-          <div className="flex items-center gap-2 mb-3">
-            <button
-              onClick={addTextElement}
-              className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            >
-              + Add text
-            </button>
-            <IconPicker
-              onPick={addIconElement}
-              customIcons={templateConfig.customIcons}
-              onUploadCustom={uploadCustomIcon}
-              onDeleteCustom={removeCustomIcon}
-            />
-          </div>
 
           {selectedElement?.type === "text" && (
             <TextElementInspector
@@ -842,145 +610,23 @@ export function TemplateEditor({
               onPatch={(patch) => patchElement(selectedElement.id, patch)}
             />
           )}
-          {!selectedElement && active.config.elements.length > 0 && (
+          {selectedElement?.type === "device" && (
+            <DeviceElementInspector
+              element={selectedElement}
+              screenshots={templateConfig.screenshots}
+              panelCount={templateConfig.panelCount}
+              onPatch={(patch) => patchElement(selectedElement.id, patch)}
+              onUploadAndAttach={async (file) => {
+                const id = await uploadScreenshot(file);
+                if (id) patchElement(selectedElement.id, { screenshotId: id });
+              }}
+            />
+          )}
+          {!selectedElement && templateConfig.elements.length > 0 && (
             <div className="text-[11px] text-zinc-500">
               Click an element above (or on the canvas) to edit it.
             </div>
           )}
-        </Section>
-
-        <Section title="Device">
-          <Label>Background override (color)</Label>
-          <ColorRow
-            value={active.config.backgroundColor ?? templateConfig.backgroundColor}
-            onChange={(v) =>
-              updateSlotConfig(active.id, { ...active.config, backgroundColor: v })
-            }
-            palette={palette}
-            allowClear
-            onClear={() =>
-              updateSlotConfig(active.id, {
-                ...active.config,
-                backgroundColor: undefined,
-              })
-            }
-          />
-
-          <Label className="mt-3">Device rotation (Z-axis spin)</Label>
-          <Slider
-            min={-30}
-            max={30}
-            value={active.config.deviceRotation}
-            onChange={(v) =>
-              updateSlotConfig(active.id, { ...active.config, deviceRotation: v })
-            }
-          />
-
-          <Label className="mt-3">Device tilt — show side edge (Y axis)</Label>
-          <Slider
-            min={-30}
-            max={30}
-            value={active.config.deviceTiltY}
-            onChange={(v) =>
-              updateSlotConfig(active.id, { ...active.config, deviceTiltY: v })
-            }
-          />
-
-          <Label className="mt-3">Device tilt — show top/bottom edge (X axis)</Label>
-          <Slider
-            min={-30}
-            max={30}
-            value={active.config.deviceTiltX}
-            onChange={(v) =>
-              updateSlotConfig(active.id, { ...active.config, deviceTiltX: v })
-            }
-          />
-
-          <Label className="mt-3">Device scale</Label>
-          <Slider
-            min={0.3}
-            max={1.2}
-            step={0.05}
-            value={active.config.deviceScale}
-            onChange={(v) =>
-              updateSlotConfig(active.id, { ...active.config, deviceScale: v })
-            }
-          />
-        </Section>
-
-        <Section title="Background image framing">
-          {!hasBg && (
-            <div className="text-xs text-zinc-500 mb-2">
-              Upload a background image (Template section above) to enable these controls.
-            </div>
-          )}
-          <div className={hasBg ? "" : "opacity-40 pointer-events-none"}>
-            {templateConfig.bgImageMode === "panorama" ? (
-              <div className="text-[11px] text-zinc-500 leading-snug">
-                Per-slot framing is locked in panorama mode so adjacent slots stay continuous.
-                Use the <span className="font-medium">Panorama zoom / blur / brightness</span>{" "}
-                sliders in the Template section to adjust the whole panorama uniformly.
-              </div>
-            ) : (
-              <>
-                <Label>Pan X</Label>
-                <Slider
-                  min={-1}
-                  max={1}
-                  step={0.05}
-                  value={active.config.bgImagePan.x}
-                  onChange={(v) =>
-                    updateSlotConfig(active.id, {
-                      ...active.config,
-                      bgImagePan: { ...active.config.bgImagePan, x: v },
-                    })
-                  }
-                />
-                <Label className="mt-3">Pan Y</Label>
-                <Slider
-                  min={-1}
-                  max={1}
-                  step={0.05}
-                  value={active.config.bgImagePan.y}
-                  onChange={(v) =>
-                    updateSlotConfig(active.id, {
-                      ...active.config,
-                      bgImagePan: { ...active.config.bgImagePan, y: v },
-                    })
-                  }
-                />
-                <Label className="mt-3">Zoom</Label>
-                <Slider
-                  min={1}
-                  max={3}
-                  step={0.1}
-                  value={active.config.bgImageZoom}
-                  onChange={(v) =>
-                    updateSlotConfig(active.id, { ...active.config, bgImageZoom: v })
-                  }
-                />
-                <Label className="mt-3">Blur (focus)</Label>
-                <Slider
-                  min={0}
-                  max={60}
-                  value={active.config.bgImageBlur}
-                  onChange={(v) =>
-                    updateSlotConfig(active.id, { ...active.config, bgImageBlur: v })
-                  }
-                />
-                <Label className="mt-3">Brightness</Label>
-                <Slider
-                  min={0}
-                  max={1.5}
-                  step={0.05}
-                  value={active.config.bgImageBrightness}
-                  onChange={(v) =>
-                    updateSlotConfig(active.id, { ...active.config, bgImageBrightness: v })
-                  }
-                />
-              </>
-            )}
-          </div>
         </Section>
 
         <div className="text-xs text-zinc-500 text-right h-4">
@@ -1023,8 +669,8 @@ function TextElementInspector({
   return (
     <div className="space-y-2 border-t border-zinc-200 dark:border-zinc-800 pt-3">
       <div className="text-[11px] text-zinc-500 leading-snug mb-1">
-        Drag the corners to resize, the side handles to change wrap width, the
-        top handle to rotate, or double-click on the canvas to edit text in place.
+        Drag the corners on the canvas to resize, the top handle to rotate, or
+        double-click text to edit in place.
       </div>
 
       <Label>Text</Label>
@@ -1226,6 +872,137 @@ function IconElementInspector({
   );
 }
 
+function DeviceElementInspector({
+  element,
+  screenshots,
+  panelCount,
+  onPatch,
+  onUploadAndAttach,
+}: {
+  element: DeviceElement;
+  screenshots: { id: string; path: string }[];
+  panelCount: number;
+  onPatch: (patch: Partial<DeviceElement>) => void;
+  onUploadAndAttach: (file: File) => void | Promise<void>;
+}) {
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const currentPanel = Math.max(
+    0,
+    Math.min(panelCount - 1, element.panelIndex ?? Math.floor(element.pos.x))
+  );
+  return (
+    <div className="space-y-2 border-t border-zinc-200 dark:border-zinc-800 pt-3">
+      <div className="text-[11px] text-zinc-500 leading-snug mb-1">
+        Drag the corners on the canvas to resize, the top handle to rotate. To
+        place a phone across two tiles, add a second device and assign it to
+        the neighbouring tile below.
+      </div>
+
+      <Label>Tile</Label>
+      <select
+        className="input"
+        value={currentPanel}
+        onChange={(e) => {
+          const next = Number(e.target.value);
+          const delta = next - currentPanel;
+          // Shift pos.x by the tile delta so the device keeps the same
+          // relative position within its new tile (e.g. "centred" stays
+          // "centred"). panelIndex is the authoritative tile assignment.
+          onPatch({
+            panelIndex: next,
+            pos: { x: element.pos.x + delta, y: element.pos.y },
+          });
+        }}
+      >
+        {Array.from({ length: panelCount }, (_, i) => (
+          <option key={i} value={i}>
+            Tile {i + 1}
+          </option>
+        ))}
+      </select>
+
+      <Label className="mt-2">Screenshot</Label>
+      <div className="grid grid-cols-4 gap-1 mb-2">
+        {screenshots.map((s) => {
+          const isSel = s.id === element.screenshotId;
+          return (
+            <button
+              key={s.id}
+              onClick={() => onPatch({ screenshotId: s.id })}
+              className={`aspect-[1/2] rounded border bg-cover bg-center bg-zinc-50 dark:bg-zinc-800 ${
+                isSel
+                  ? "border-blue-500 ring-2 ring-blue-500"
+                  : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
+              }`}
+              style={{ backgroundImage: `url("/api/uploads/${s.path}")` }}
+              title={s.id}
+            />
+          );
+        })}
+        <input
+          ref={uploadRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onUploadAndAttach(f);
+            e.target.value = "";
+          }}
+        />
+        <button
+          onClick={() => uploadRef.current?.click()}
+          title="Upload + attach"
+          className="aspect-[1/2] rounded border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950 text-zinc-400 hover:text-blue-500 flex items-center justify-center text-lg"
+        >
+          +
+        </button>
+      </div>
+      {element.screenshotId && (
+        <button
+          onClick={() => onPatch({ screenshotId: undefined })}
+          className="text-[11px] text-zinc-500 hover:text-red-600 mb-2"
+        >
+          Detach screenshot
+        </button>
+      )}
+
+      <Label>Size (fraction of panel width)</Label>
+      <Slider
+        min={0.2}
+        max={1.5}
+        step={0.05}
+        value={element.size}
+        onChange={(v) => onPatch({ size: v })}
+      />
+
+      <Label className="mt-2">Z-axis rotation (°)</Label>
+      <Slider
+        min={-90}
+        max={90}
+        value={Math.round(element.rotation)}
+        onChange={(v) => onPatch({ rotation: v })}
+      />
+
+      <Label className="mt-2">Side tilt (Y axis)</Label>
+      <Slider
+        min={-30}
+        max={30}
+        value={Math.round(element.tiltY)}
+        onChange={(v) => onPatch({ tiltY: v })}
+      />
+
+      <Label className="mt-2">Top/bottom tilt (X axis)</Label>
+      <Slider
+        min={-30}
+        max={30}
+        value={Math.round(element.tiltX)}
+        onChange={(v) => onPatch({ tiltX: v })}
+      />
+    </div>
+  );
+}
+
 function CustomIconGrid({
   customIcons,
   selectedIconValue,
@@ -1322,7 +1099,7 @@ function IconPicker({
         onClick={() => setOpen((o) => !o)}
         className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
       >
-        + Add icon
+        + Icon
       </button>
       {open && (
         <div
@@ -1377,8 +1154,11 @@ function IconPicker({
   );
 }
 
+// Suppress unused — used by default factories.
+void defaultTextElement;
+
 // ============================================================================
-// Small UI helpers (unchanged from before)
+// Small UI helpers (unchanged)
 // ============================================================================
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

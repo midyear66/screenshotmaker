@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { prisma } from "@/lib/db";
 import { TemplateEditor } from "@/components/editor/TemplateEditor";
+import { migrateProjectIfNeeded } from "@/lib/projectMigration";
+import { parseTemplateConfig } from "@/lib/editor-types";
 
 export const dynamic = "force-dynamic";
 
@@ -11,14 +12,16 @@ export default async function ProjectPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const project = await prisma.project.findUnique({
-    where: { id },
-    include: {
-      template: { include: { slots: { orderBy: { order: "asc" } } } },
-      screens: { orderBy: { slotOrder: "asc" } },
-    },
-  });
-  if (!project) notFound();
+  let project;
+  try {
+    // One-shot migration: if the project's template still uses the old per-slot
+    // shape, transform to the continuous-canvas model and persist.
+    project = await migrateProjectIfNeeded(id);
+  } catch {
+    notFound();
+  }
+
+  const config = parseTemplateConfig(project.template.config);
 
   return (
     <main className="flex-1 w-full max-w-6xl mx-auto px-6 py-6">
@@ -31,29 +34,18 @@ export default async function ProjectPage({
         </Link>
         <h1 className="text-lg font-semibold">{project.template.name}</h1>
         <span className="text-xs text-zinc-500 tabular-nums">
-          {project.screens.length} / {project.template.slotCount} screens
+          {config.panelCount} panel{config.panelCount === 1 ? "" : "s"}
         </span>
       </div>
       <TemplateEditor
         template={{
           id: project.template.id,
           name: project.template.name,
-          slotCount: project.template.slotCount,
           config: project.template.config,
-          slots: project.template.slots.map((s) => ({
-            id: s.id,
-            order: s.order,
-            config: s.config,
-          })),
         }}
         project={{
           projectId: project.id,
           projectName: project.name,
-          screens: project.screens.map((s) => ({
-            id: s.id,
-            slotOrder: s.slotOrder,
-            screenshotPath: s.screenshotPath,
-          })),
         }}
       />
     </main>

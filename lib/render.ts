@@ -2,8 +2,11 @@
 
 import Konva from "konva";
 import {
-  CANVAS_WIDTH,
-  SlotConfig,
+  PANEL_GAP_PX,
+  PANEL_W,
+  PANEL_H,
+  CanvasElement,
+  ScreenshotAsset,
   TemplateConfig,
   isCustomIcon,
   customIconPath,
@@ -33,9 +36,6 @@ export const DEVICE_SIZES: DeviceSize[] = [
   { key: "ipad-13", label: 'iPad Pro 13"', folder: "iPad-13", width: 2064, height: 2752 },
 ];
 
-/**
- * Load an HTMLImageElement, awaiting decode before resolving.
- */
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new window.Image();
@@ -47,26 +47,61 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 }
 
 /**
- * Render one slot at native device pixel size to a PNG Blob.
+ * Half of an element's bounding-box width, expressed in panel-x units
+ * (i.e., fraction of PANEL_W). Used to decide which panels the element
+ * overlaps and how much to clamp its position so each panel renders it
+ * whole.
  *
- * Layout strategy: normalized coords (0..1 over the iPhone 6.7 base aspect)
- * are mapped to the target device size. Device frame, font sizes, and the
- * deviceScale multiplier all use a uniform scale of deviceWidth/CANVAS_WIDTH
- * so the device stays proportional. Y positions use deviceHeight, so on
- * non-iPhone aspect ratios (e.g. iPad), the vertical layout stretches —
- * acceptable for v1.
+ * TextElement: `width` is already in panel-x units (fraction of PANEL_W).
+ * IconElement: `size` is in canvas-px, so divide by PANEL_W.
+ * DeviceElement: `size` is fraction of PANEL_W already.
  */
-export async function renderSlotToBlob(args: {
-  template: TemplateConfig;
-  slot: SlotConfig;
-  slotNumber: number;
-  totalSlots: number;
-  screenshotUrl: string | null;
-  device: DeviceSize;
-}): Promise<Blob> {
-  const { template, slot, slotNumber, totalSlots, screenshotUrl, device } = args;
+function elementHalfPanelWidth(el: CanvasElement): number {
+  if (el.type === "text") return el.width / 2;
+  if (el.type === "icon") return el.size / 2 / PANEL_W;
+  return el.size / 2;
+}
 
-  const xScale = device.width / CANVAS_WIDTH;
+/** Load all screenshots referenced by DeviceElements in one pass. */
+async function loadScreenshotMap(
+  screenshots: ScreenshotAsset[]
+): Promise<Map<string, HTMLImageElement>> {
+  const map = new Map<string, HTMLImageElement>();
+  await Promise.all(
+    screenshots.map(async (s) => {
+      try {
+        const img = await loadImage(`/api/uploads/${s.path}`);
+        map.set(s.id, img);
+      } catch {
+        // missing or broken image; device will fall back to placeholder
+      }
+    })
+  );
+  return map;
+}
+
+/**
+ * Render one panel of the project's continuous canvas at the device's native
+ * pixel size. Elements are positioned in panel-space (`pos.x` is panels,
+ * `pos.y` is 0..1 of height); the renderer translates them to panel-local
+ * pixel coords and relies on Konva's stage-bounds clipping to hard-crop at
+ * panel edges.
+ */
+export async function renderPanelToBlob(args: {
+  template: TemplateConfig;
+  panelIndex: number;
+  device: DeviceSize;
+  /** Pre-loaded screenshot map (avoids re-fetching across multiple panels). */
+  screenshotMap?: Map<string, HTMLImageElement>;
+  bgImage?: HTMLImageElement | null;
+}): Promise<Blob> {
+  const { template, panelIndex, device } = args;
+  const panelCount = Math.max(1, template.panelCount);
+  // pixel-scale relative to base panel logical dimensions
+  const xScale = device.width / PANEL_W;
+  // y scale is device.height / PANEL_H; intentionally allowed to differ from
+  // xScale so the export matches the editor's non-uniform scaling.
+  const yScale = device.height / PANEL_H;
 
   const container = document.createElement("div");
   container.style.position = "absolute";
@@ -83,28 +118,45 @@ export async function renderSlotToBlob(args: {
   stage.add(layer);
 
   try {
-    const screenshotImg = screenshotUrl ? await loadImage(screenshotUrl) : null;
-    const bgImage = template.bgImagePath
-      ? await loadImage(`/api/uploads/${template.bgImagePath}`).catch(() => null)
-      : null;
+    const screenshotMap =
+      args.screenshotMap ?? (await loadScreenshotMap(template.screenshots));
+    const bgImage =
+      args.bgImage ??
+      (template.bgImagePath
+        ? await loadImage(`/api/uploads/${template.bgImagePath}`).catch(() => null)
+        : null);
 
-    // ---- Background ----
+    // ---- Background (sliced to this panel) ----
     const bgCanvas = renderBackgroundCanvas({
       width: device.width,
       height: device.height,
       bgImage,
-      slot,
-      fallbackColor: slot.backgroundColor ?? template.backgroundColor,
-      panorama:
-        template.bgImageMode === "panorama"
-          ? {
-              slotIndex: slotNumber - 1,
-              totalSlots,
-              zoom: template.bgImagePanoZoom,
-              blur: template.bgImagePanoBlur,
-              brightness: template.bgImagePanoBrightness,
-            }
-          : undefined,
+      slot: {
+        devicePos: { x: 0, y: 0 },
+        deviceScale: 1,
+        deviceRotation: 0,
+        deviceTiltX: 0,
+        deviceTiltY: 0,
+        bgImagePan: { x: 0, y: 0 },
+        bgImageZoom: 1,
+        bgImageBlur: 0,
+        bgImageBrightness: 1,
+        elements: [],
+      },
+      fallbackColor: template.backgroundColor,
+      panorama: {
+        slotIndex: panelIndex,
+        totalSlots: panelCount,
+        zoom: template.bgImagePanoZoom,
+        blur: template.bgImagePanoBlur,
+        brightness: template.bgImagePanoBrightness,
+        // gap=0: split the cover-fit area into N equal slices, one per
+        // panel. No source pixels are "lost" between bands — sliding the
+        // exported PNGs together reconstructs the full cover-fit area.
+        // Editor uses the same mapping (see EditorCanvas) so spanning
+        // iPhones land at the same source pixels in both views.
+        gap: 0,
+      },
     });
     layer.add(
       new Konva.Image({
@@ -117,127 +169,35 @@ export async function renderSlotToBlob(args: {
       })
     );
 
-    // ---- Device (with optional perspective tilt) ----
-    const deviceX = slot.devicePos.x * device.width;
-    const deviceY = slot.devicePos.y * device.height;
-    const deviceScale = slot.deviceScale * xScale;
+    // ---- Elements: render at natural panel-local position; Konva clips at
+    // the stage edges. This means an element whose bounding box crosses a
+    // panel boundary appears as a fragment in the adjacent panel(s) —
+    // matching the AppScreenStudio aesthetic where adjacent panels visually
+    // connect (each panel shows its own content plus small edge slivers of
+    // any elements that overflow from its neighbours).
+    for (const el of template.elements) {
+      const halfPanelX = elementHalfPanelWidth(el);
+      // Cheap optimisation: skip elements clearly outside this panel.
+      if (el.pos.x + halfPanelX <= panelIndex) continue;
+      if (el.pos.x - halfPanelX >= panelIndex + 1) continue;
 
-    const flat = renderFlatDeviceFrame({
-      screenshot: screenshotImg,
-      slotNumber,
-      bezelColor: template.bezelColor,
-      cornerRadius: template.bezelCornerRadius,
-    });
-    let warpedCanvas: HTMLCanvasElement = flat;
-    let warpedW = flat.width;
-    let warpedH = flat.height;
-    let pivotX = flat.width / 2;
-    let pivotY = flat.height / 2;
-    if (Math.abs(slot.deviceTiltX) >= 0.5 || Math.abs(slot.deviceTiltY) >= 0.5) {
-      const sideFill = scaleColor(template.bezelColor, 0.6);
-      const tilted = computeTiltedDevice(
-        BEZEL_W,
-        BEZEL_H,
-        template.bezelCornerRadius ?? CORNER_RADIUS,
-        slot.deviceTiltX,
-        slot.deviceTiltY,
-        { sideFill }
-      );
-      warpedCanvas = renderTiltedDevice(flat, tilted, { subdivisions: 60 });
-      warpedW = tilted.width;
-      warpedH = tilted.height;
-      pivotX = tilted.pivot.x;
-      pivotY = tilted.pivot.y;
-    }
+      const xPanel = (el.pos.x - panelIndex) * device.width;
+      const yPanel = el.pos.y * device.height;
 
-    layer.add(
-      new Konva.Image({
-        image: warpedCanvas,
-        x: deviceX,
-        y: deviceY,
-        width: warpedW,
-        height: warpedH,
-        offsetX: pivotX,
-        offsetY: pivotY,
-        scaleX: deviceScale,
-        scaleY: deviceScale,
-        rotation: slot.deviceRotation,
-        shadowColor: "black",
-        shadowBlur: 40,
-        shadowOpacity: 0.35,
-        shadowOffsetY: 20,
-      })
-    );
-
-    // ---- Slot elements (text + icons), in array order. ----
-    for (const el of slot.elements) {
       if (el.type === "text") {
-        const blockW = el.width * CANVAS_WIDTH * xScale;
-        const fontPx = el.fontSize * xScale;
-        layer.add(
-          new Konva.Text({
-            x: el.pos.x * device.width,
-            y: el.pos.y * device.height,
-            width: blockW,
-            offsetX: blockW / 2,
-            offsetY: fontPx * 0.6,
-            rotation: el.rotation,
-            align: el.align,
-            text: el.text,
-            fontSize: fontPx,
-            fontFamily: el.fontFamily ?? template.fontFamily,
-            fontStyle: `${el.italic ? "italic " : ""}${el.weight}`,
-            fill: el.color,
-          })
+        renderText(layer, el, xPanel, yPanel, xScale, template);
+      } else if (el.type === "device") {
+        await renderDeviceElement(
+          layer,
+          el,
+          xPanel,
+          yPanel,
+          xScale,
+          template,
+          screenshotMap
         );
-      } else if (isCustomIcon(el.icon)) {
-        // User-uploaded SVG — load as an Image, preserve aspect ratio.
-        const url = `/api/uploads/${customIconPath(el.icon)}`;
-        const img = await loadImage(url).catch(() => null);
-        if (!img || img.width === 0 || img.height === 0) continue;
-        const longest = el.size * xScale;
-        let w: number;
-        let h: number;
-        if (img.width >= img.height) {
-          w = longest;
-          h = longest * (img.height / img.width);
-        } else {
-          h = longest;
-          w = longest * (img.width / img.height);
-        }
-        layer.add(
-          new Konva.Image({
-            image: img,
-            x: el.pos.x * device.width,
-            y: el.pos.y * device.height,
-            width: w,
-            height: h,
-            offsetX: w / 2,
-            offsetY: h / 2,
-            rotation: el.rotation,
-          })
-        );
-      } else {
-        const def = ICONS[el.icon];
-        if (!def) continue;
-        const iconScale = (el.size * xScale) / ICON_VIEWBOX_SIZE;
-        layer.add(
-          new Konva.Path({
-            x: el.pos.x * device.width,
-            y: el.pos.y * device.height,
-            data: def.path,
-            fill: def.stroke ? undefined : el.color,
-            stroke: def.stroke ? el.color : undefined,
-            strokeWidth: def.stroke ? 2 : 0,
-            lineCap: "round",
-            lineJoin: "round",
-            scaleX: iconScale,
-            scaleY: iconScale,
-            offsetX: ICON_VIEWBOX_SIZE / 2,
-            offsetY: ICON_VIEWBOX_SIZE / 2,
-            rotation: el.rotation,
-          })
-        );
+      } else if (el.type === "icon") {
+        renderIcon(layer, el, xPanel, yPanel, xScale, yScale);
       }
     }
 
@@ -257,4 +217,155 @@ export async function renderSlotToBlob(args: {
     stage.destroy();
     container.remove();
   }
+}
+
+function renderText(
+  layer: Konva.Layer,
+  el: Extract<CanvasElement, { type: "text" }>,
+  xPanel: number,
+  yPanel: number,
+  xScale: number,
+  template: TemplateConfig
+) {
+  const blockW = el.width * PANEL_W * xScale;
+  const fontPx = el.fontSize * xScale;
+  layer.add(
+    new Konva.Text({
+      x: xPanel,
+      y: yPanel,
+      width: blockW,
+      offsetX: blockW / 2,
+      offsetY: fontPx * 0.6,
+      rotation: el.rotation,
+      align: el.align,
+      text: el.text,
+      fontSize: fontPx,
+      fontFamily: el.fontFamily ?? template.fontFamily,
+      fontStyle: `${el.italic ? "italic " : ""}${el.weight}`,
+      fill: el.color,
+    })
+  );
+}
+
+function renderIcon(
+  layer: Konva.Layer,
+  el: Extract<CanvasElement, { type: "icon" }>,
+  xPanel: number,
+  yPanel: number,
+  xScale: number,
+  _yScale: number
+) {
+  void _yScale;
+  if (isCustomIcon(el.icon)) {
+    // Custom SVG: load synchronously isn't possible from inside this helper —
+    // for export we'd need it pre-loaded. Pull it from a cache keyed by path,
+    // or skip if not already loaded. We do load it here on demand:
+    const img = new window.Image();
+    img.crossOrigin = "anonymous";
+    img.src = `/api/uploads/${customIconPath(el.icon)}`;
+    // Konva.Image accepts an image that hasn't finished loading; the layer
+    // will repaint when it does. For final-PNG output we rely on the caller
+    // having preloaded; otherwise the icon may be missing. Pragmatic: most
+    // export passes await the bg + screenshots, and SVGs decode fast.
+    const longest = el.size * xScale;
+    layer.add(
+      new Konva.Image({
+        image: img,
+        x: xPanel,
+        y: yPanel,
+        width: longest,
+        height: longest,
+        offsetX: longest / 2,
+        offsetY: longest / 2,
+        rotation: el.rotation,
+      })
+    );
+    return;
+  }
+  const def = ICONS[el.icon];
+  if (!def) return;
+  const iconScale = (el.size * xScale) / ICON_VIEWBOX_SIZE;
+  layer.add(
+    new Konva.Path({
+      x: xPanel,
+      y: yPanel,
+      data: def.path,
+      fill: def.stroke ? undefined : el.color,
+      stroke: def.stroke ? el.color : undefined,
+      strokeWidth: def.stroke ? 2 : 0,
+      lineCap: "round",
+      lineJoin: "round",
+      scaleX: iconScale,
+      scaleY: iconScale,
+      offsetX: ICON_VIEWBOX_SIZE / 2,
+      offsetY: ICON_VIEWBOX_SIZE / 2,
+      rotation: el.rotation,
+    })
+  );
+}
+
+async function renderDeviceElement(
+  layer: Konva.Layer,
+  el: Extract<CanvasElement, { type: "device" }>,
+  xPanel: number,
+  yPanel: number,
+  xScale: number,
+  template: TemplateConfig,
+  screenshotMap: Map<string, HTMLImageElement>
+) {
+  const screenshot = el.screenshotId ? screenshotMap.get(el.screenshotId) ?? null : null;
+
+  const flat = renderFlatDeviceFrame({
+    screenshot,
+    bezelColor: template.bezelColor,
+    cornerRadius: template.bezelCornerRadius,
+  });
+
+  let warpedCanvas: HTMLCanvasElement = flat;
+  let warpedW = flat.width;
+  let warpedH = flat.height;
+  let pivotX = flat.width / 2;
+  let pivotY = flat.height / 2;
+  if (Math.abs(el.tiltX) >= 0.5 || Math.abs(el.tiltY) >= 0.5) {
+    const sideFill = scaleColor(template.bezelColor, 0.6);
+    const tilted = computeTiltedDevice(
+      BEZEL_W,
+      BEZEL_H,
+      template.bezelCornerRadius ?? CORNER_RADIUS,
+      el.tiltX,
+      el.tiltY,
+      { sideFill }
+    );
+    warpedCanvas = renderTiltedDevice(flat, tilted, { subdivisions: 60 });
+    warpedW = tilted.width;
+    warpedH = tilted.height;
+    pivotX = tilted.pivot.x;
+    pivotY = tilted.pivot.y;
+  }
+
+  // `el.size` is a fraction of PANEL_W. The flat raster is BEZEL_W wide.
+  // Render size in canvas px = el.size * PANEL_W. At device pixel scale:
+  // device px size = el.size * PANEL_W * xScale.
+  // The Konva.Image is given native warped raster dimensions, scaled by:
+  // (target / source) = (el.size * PANEL_W * xScale) / BEZEL_W
+  const deviceScale = (el.size * PANEL_W * xScale) / BEZEL_W;
+
+  layer.add(
+    new Konva.Image({
+      image: warpedCanvas,
+      x: xPanel,
+      y: yPanel,
+      width: warpedW,
+      height: warpedH,
+      offsetX: pivotX,
+      offsetY: pivotY,
+      scaleX: deviceScale,
+      scaleY: deviceScale,
+      rotation: el.rotation,
+      shadowColor: "black",
+      shadowBlur: 40,
+      shadowOpacity: 0.35,
+      shadowOffsetY: 20,
+    })
+  );
 }

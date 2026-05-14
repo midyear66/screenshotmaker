@@ -24,6 +24,18 @@ export type PanoramaInfo = {
   blur?: number;
   /** Template-wide brightness override (0..1.5 multiplier). */
   brightness?: number;
+  /**
+   * Gap between panels in the SAME units as `width`. When > 0 the bg image
+   * is cover-fit to the **full display area** (panels + gaps), and this
+   * panel's slice corresponds to its share of that display area. This means
+   * the source-pixel mapping a panel shows is consistent with what an
+   * editor that draws the bg continuously across gaps would render — so
+   * exported PNGs match the on-screen preview slice-for-slice.
+   *
+   * When 0 or omitted, falls back to the legacy "equal-band per panel"
+   * cover-fit (each band independently cover-fit to width × height).
+   */
+  gap?: number;
 };
 
 export function renderBackgroundCanvas(args: {
@@ -59,35 +71,45 @@ export function renderBackgroundCanvas(args: {
   let srcH: number;
 
   if (panorama && panorama.totalSlots > 0) {
-    // ---- Panorama: this slot owns a 1/N vertical band of the image. ----
+    // ---- Panorama: cover-fit the source image ONCE to the full display
+    // area (panels + gaps), then this panel gets the contiguous slice of
+    // source pixels that correspond to its display range. Adjacent panels'
+    // slices share their boundary exactly — no inter-band cropping
+    // discontinuities. With gap=0 (the default after the editor's
+    // edge-to-edge layout), the source is split into N equal contiguous
+    // slices of the cover-fit area; with gap>0, the gap regions of the
+    // source are skipped (corresponding to the visible gutter in the editor).
     const totalSlots = Math.max(1, panorama.totalSlots);
     const idx = Math.max(0, Math.min(totalSlots - 1, panorama.slotIndex));
-    // Zoom shrinks the visible horizontal range of the image around its
-    // centre. At zoom=1 the full image is split into N bands; at zoom=z
-    // only the middle 1/z of the image is split into N bands. Bands stay
-    // adjacent so the panorama remains continuous.
-    const zoom = Math.max(1, panorama.zoom ?? 1);
-    const visibleW = imgW / zoom;
-    const visibleX = (imgW - visibleW) / 2;
-    const bandW = visibleW / totalSlots;
-    const bandX = visibleX + idx * bandW;
+    const gap = Math.max(0, panorama.gap ?? 0);
+    const totalDisplayW = totalSlots * width + (totalSlots - 1) * gap;
+    const totalDisplayAspect = totalDisplayW / height;
 
-    // Cover-fit the band to the canvas aspect.
-    const bandAspect = bandW / imgH;
-    if (bandAspect > dstAspect) {
-      // Band wider than the canvas — crop horizontally within the band.
-      srcH = imgH;
-      srcW = imgH * dstAspect;
-      srcX = bandX + (bandW - srcW) / 2;
-      srcY = 0;
+    // Optionally narrow the visible range via zoom (centred crop).
+    const zoom = Math.max(1, panorama.zoom ?? 1);
+    const imgAspect = imgW / imgH;
+    let coverW: number;
+    let coverH: number;
+    if (imgAspect > totalDisplayAspect) {
+      // Image wider than total display — cover by height, crop horizontally
+      coverH = imgH;
+      coverW = imgH * totalDisplayAspect;
     } else {
-      // Band taller than the canvas — crop vertically within the band.
-      srcW = bandW;
-      srcH = bandW / dstAspect;
-      srcX = bandX;
-      srcY = (imgH - srcH) / 2;
+      coverW = imgW;
+      coverH = imgW / totalDisplayAspect;
     }
-    // Per-slot pan/zoom intentionally ignored in panorama mode.
+    coverW = coverW / zoom;
+    coverH = coverH / zoom;
+    const coverX = (imgW - coverW) / 2;
+    const coverY = (imgH - coverH) / 2;
+
+    // This panel's display range as a fraction of totalDisplayW:
+    const fracStart = (idx * (width + gap)) / totalDisplayW;
+    const fracEnd = (idx * (width + gap) + width) / totalDisplayW;
+    srcX = coverX + fracStart * coverW;
+    srcW = (fracEnd - fracStart) * coverW;
+    srcY = coverY;
+    srcH = coverH;
   } else {
     // ---- Single mode: cover-fit the full image, then zoom + pan. ----
     const imgAspect = imgW / imgH;

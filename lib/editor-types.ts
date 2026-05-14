@@ -1,9 +1,34 @@
-// Shared types + defaults for the template editor.
-// Coordinates are normalized 0..1 over the canvas (1290 x 2796) so layouts
-// scale cleanly to other device sizes at export.
+// Shared types + defaults for the editor.
+//
+// **Model:** the project owns a single wide canvas of size
+// `panelCount * PANEL_W` wide by `PANEL_H` tall. Elements (text, icons,
+// devices) live in *panel-space* — `pos.x` is in panels (0..panelCount),
+// `pos.y` is normalized 0..1 of canvas height. Panels are export-only
+// slice points; on export the wide canvas is hard-cropped into N PNGs.
+//
+// `CANVAS_WIDTH` / `CANVAS_HEIGHT` are the single-panel logical pixel
+// dimensions (an iPhone 6.7 portrait). One panel = 1290 logical px wide.
 
-export const CANVAS_WIDTH = 1290;
-export const CANVAS_HEIGHT = 2796;
+export const PANEL_W = 1290;
+export const PANEL_H = 2796;
+
+/**
+ * Visual gutter between panels in the editor (canvas-px, relative to PANEL_W).
+ * Drawn as white space between tiles so the editor matches the App Store
+ * Connect screenshot layout. Background slicing stays contiguous across the
+ * gap (no source pixels are hidden) — see `lib/background.ts` panorama path.
+ * Elements are hard-clipped at the panel edge so they don't bleed into the
+ * gap; a "phone bridging two screens" effect is achieved by placing one
+ * device on each adjacent tile.
+ */
+export const PANEL_GAP_PX = 60;
+
+/**
+ * @deprecated Kept as aliases for legacy callers that hard-code "the
+ * canvas". New code should use PANEL_W/PANEL_H and multiply by panelCount.
+ */
+export const CANVAS_WIDTH = PANEL_W;
+export const CANVAS_HEIGHT = PANEL_H;
 
 /**
  * A user-uploaded SVG icon attached to a template. The `path` is relative
@@ -16,27 +41,51 @@ export type CustomIcon = {
   path: string;
 };
 
+/**
+ * A screenshot upload available to any DeviceElement on the canvas.
+ * Stored under `data/uploads/projects/<projectId>/screenshots/`.
+ */
+export type ScreenshotAsset = {
+  id: string;
+  path: string;          // relative to UPLOAD_DIR
+  uploadedAt: string;    // ISO timestamp
+};
+
 export type TemplateConfig = {
   backgroundColor: string;
   fontFamily: string;
   bgImagePath?: string; // relative to UPLOAD_DIR, e.g. "templates/<id>/bg.jpg"
   /**
-   * "single"   = every slot shows the same image (per-slot pan/zoom apply).
-   * "panorama" = the image is split into N equal vertical bands, slot k gets
-   *              band k, so viewed side-by-side the slots form the full image.
-   *              Per-slot pan/zoom are ignored in this mode; blur/brightness
-   *              still apply.
+   * Legacy. Pre-canvas model used "panorama" mode to share one image across
+   * slots. The new continuous-canvas model always treats the bg image as a
+   * single wide image, so this field is ignored at render time but kept for
+   * backwards-compatible parsing.
    */
   bgImageMode: "single" | "panorama";
   bgImagePanoZoom: number;
   bgImagePanoBlur: number;
   bgImagePanoBrightness: number;
-  bezelColor: string; // hex; sides are auto-derived as a darker shade
-  /** Device bezel corner radius in 1290-wide canvas px (0..200). Default 90 ≈ iPhone. */
+  bezelColor: string; // hex; sides auto-derived darker
+  /** Device bezel corner radius in panel-px (0..200). Default 90 ≈ iPhone. */
   bezelCornerRadius: number;
-  /** User-uploaded SVG icons available to this template's slots. */
+  /** User-uploaded SVG icons available as IconElement sources. */
   customIcons: CustomIcon[];
+  /** Number of vertical slice bands. Width = panelCount * PANEL_W. */
+  panelCount: number;
+  /** Canvas-space elements (text + icon + device), drawn in array order. */
+  elements: CanvasElement[];
+  /** Pool of uploaded screenshots; DeviceElement.screenshotId references these. */
+  screenshots: ScreenshotAsset[];
+  /**
+   * Numeric marker tracking which one-shot migrations have been applied.
+   * Older projects open with a smaller value (or undefined → 0) and the
+   * migration helper applies any missing steps before returning.
+   */
+  migrationVersion?: number;
 };
+
+/** Latest migration step number; bump this and add a step in lib/projectMigration.ts. */
+export const LATEST_MIGRATION_VERSION = 3;
 
 /**
  * Custom icon sentinel: `IconElement.icon` values starting with this prefix
@@ -55,7 +104,12 @@ export function customIconPath(iconValue: string): string {
 export type TextElement = {
   type: "text";
   id: string;
-  /** Centre of the text block, normalized 0..1. */
+  /**
+   * Centre of the text block in **panel-space**: `x` is in panel units
+   * (0..panelCount; 1.5 = centre of the 2nd panel), `y` is 0..1 of canvas
+   * height. Legacy slot-local data uses `x` in 0..1 of a single panel; the
+   * migration helper offsets old values by their slot index.
+   */
   pos: { x: number; y: number };
   /**
    * Block width as a fraction of canvas width. Auto-maintained to hug the
@@ -81,17 +135,48 @@ export type TextElement = {
 export type IconElement = {
   type: "icon";
   id: string;
-  /** Centre of the icon, normalized 0..1. */
+  /** Centre of the icon in panel-space (see TextElement.pos). */
   pos: { x: number; y: number };
-  /** Edge length in 1290-wide canvas space (scaled at export per device). */
+  /** Edge length in panel-px (scaled at export per device). */
   size: number;
-  /** Key in ICONS (lib/icons.ts). */
+  /** Key in ICONS (lib/icons.ts) OR "custom:<path>" for uploaded SVG. */
   icon: string;
   color: string;
-  /** Degrees, rotated around the icon's centre. */
   rotation: number;
 };
 
+/**
+ * A phone bezel + screenshot, positioned freely on the canvas. Replaces the
+ * old per-slot device. Bezel colour + corner radius come from the project
+ * config (so all devices share one device family); tilt is per-device.
+ */
+export type DeviceElement = {
+  type: "device";
+  id: string;
+  /** Centre of the device in panel-space. */
+  pos: { x: number; y: number };
+  /** Bezel size relative to PANEL_W (0.7 ≈ today's default). */
+  size: number;
+  /** Z-axis spin in degrees. */
+  rotation: number;
+  /** X-axis perspective tilt (top tilts towards/away). */
+  tiltX: number;
+  /** Y-axis perspective tilt (side tilts towards/away). */
+  tiltY: number;
+  /** References ScreenshotAsset.id in the project's pool; undefined = placeholder. */
+  screenshotId?: string;
+  /**
+   * Which tile this device renders inside. Dragging never changes this — the
+   * user moves a device to another tile from the inspector. When undefined
+   * (legacy data), `Math.floor(pos.x)` is used as a fallback. New devices
+   * always set this explicitly.
+   */
+  panelIndex?: number;
+};
+
+export type CanvasElement = TextElement | IconElement | DeviceElement;
+
+/** @deprecated Use CanvasElement. Kept for the migration layer. */
 export type SlotElement = TextElement | IconElement;
 
 export type SlotConfig = {
@@ -120,7 +205,24 @@ export const DEFAULT_TEMPLATE_CONFIG: TemplateConfig = {
   bezelColor: "#1f1f1f",
   bezelCornerRadius: 90,
   customIcons: [],
+  panelCount: 1,
+  elements: [],
+  screenshots: [],
 };
+
+/** Default DeviceElement (placed at the centre of the active visual area). */
+export function defaultDeviceElement(panelIndex: number = 0): DeviceElement {
+  return {
+    type: "device",
+    id: newElementId(),
+    pos: { x: panelIndex + 0.5, y: 0.62 },
+    size: 0.7,
+    rotation: 0,
+    tiltX: 0,
+    tiltY: 0,
+    panelIndex,
+  };
+}
 
 export const DEFAULT_SLOT_CONFIG: SlotConfig = {
   devicePos: { x: 0.5, y: 0.62 },
@@ -183,12 +285,14 @@ export function defaultIconElement(icon: string): IconElement {
   };
 }
 
-function newElementId(): string {
-  // Available in modern browsers + Node 22+; the editor only runs in client.
+/**
+ * Generate a fresh element id. Exposed so the migration helper can also
+ * mint ids server-side.
+ */
+export function newElementId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
   }
-  // Fallback — only used in degraded environments.
   return `el-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
 }
 
@@ -200,10 +304,24 @@ export function parseTemplateConfig(raw: string | null | undefined): TemplateCon
       ...DEFAULT_TEMPLATE_CONFIG,
       ...parsed,
       customIcons: Array.isArray(parsed.customIcons) ? parsed.customIcons : [],
+      elements: Array.isArray(parsed.elements) ? parsed.elements : [],
+      screenshots: Array.isArray(parsed.screenshots) ? parsed.screenshots : [],
     };
   } catch {
     return { ...DEFAULT_TEMPLATE_CONFIG };
   }
+}
+
+/** Has the project been migrated to the continuous-canvas model? */
+export function isMigratedConfig(config: TemplateConfig): boolean {
+  return (
+    typeof config.panelCount === "number" &&
+    config.panelCount > 0 &&
+    Array.isArray(config.elements)
+    // Note: empty elements array is valid (a fresh post-migration project).
+    // We rely on panelCount being explicitly set by the migration to
+    // distinguish migrated configs from raw defaults.
+  );
 }
 
 export function parseSlotConfig(raw: string | null | undefined): SlotConfig {

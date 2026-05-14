@@ -12,19 +12,22 @@ import {
 } from "react-konva";
 import type Konva from "konva";
 import {
-  CANVAS_HEIGHT,
-  CANVAS_WIDTH,
-  SlotConfig,
-  SlotElement,
+  PANEL_GAP_PX as PANEL_GAP_PX_FROM_TYPES,
+  PANEL_H,
+  PANEL_W,
   TemplateConfig,
   TextElement,
   IconElement,
+  DeviceElement,
+  CanvasElement,
+  ScreenshotAsset,
   isCustomIcon,
   customIconPath,
 } from "@/lib/editor-types";
 import { renderBackgroundCanvas } from "@/lib/background";
 import { ICON_VIEWBOX_SIZE, ICONS } from "@/lib/icons";
 import { autoWidth, measureTextPx } from "@/lib/textMeasure";
+import { BEZEL_W, BEZEL_H, CORNER_RADIUS } from "@/lib/deviceFrame";
 import { DeviceFrame } from "./DeviceFrame";
 import { useImage } from "./useImage";
 
@@ -32,30 +35,75 @@ function fontFamilyOf(el: TextElement, template: TemplateConfig): string {
   return el.fontFamily ?? template.fontFamily;
 }
 
+/** Use the shared constant. */
+const PANEL_GAP_PX = PANEL_GAP_PX_FROM_TYPES;
+
+function panelXToDisplayX(panelX: number, panelCount: number): number {
+  // Each integer boundary crossed adds one gap of shift. Clamp the gap count
+  // so positions beyond the last panel don't accumulate phantom gaps.
+  const flooredShift = Math.min(panelCount - 1, Math.max(0, Math.floor(panelX)));
+  return panelX * PANEL_W + flooredShift * PANEL_GAP_PX;
+}
+
+function displayXToPanelX(displayX: number, panelCount: number): number {
+  // If displayX is inside any panel band, invert linearly.
+  for (let i = 0; i < panelCount; i++) {
+    const panelStart = i * (PANEL_W + PANEL_GAP_PX);
+    const panelEnd = panelStart + PANEL_W;
+    if (displayX >= panelStart && displayX <= panelEnd) {
+      return i + (displayX - panelStart) / PANEL_W;
+    }
+  }
+  // Otherwise we're inside a gap (or past the last panel). Snap to nearest
+  // adjacent panel edge — we can't represent "centred in the gap" because
+  // panel_x is gap-free by definition.
+  for (let i = 0; i < panelCount - 1; i++) {
+    const gapStart = i * (PANEL_W + PANEL_GAP_PX) + PANEL_W;
+    const gapEnd = gapStart + PANEL_GAP_PX;
+    if (displayX > gapStart && displayX < gapEnd) {
+      const distLeft = displayX - gapStart;
+      const distRight = gapEnd - displayX;
+      // Snap to right edge of panel i, or left edge of panel i+1.
+      return distLeft <= distRight ? i + 0.999 : i + 1.0;
+    }
+  }
+  // Past the last panel: clamp to its right edge.
+  return panelCount > 0 ? panelCount - 0.001 : 0;
+}
+
+function totalStageWidth(panelCount: number): number {
+  return panelCount * PANEL_W + Math.max(0, panelCount - 1) * PANEL_GAP_PX;
+}
+
+/**
+ * Tile a given element renders inside. Devices use their explicit
+ * `panelIndex`; everything else falls back to `Math.floor(pos.x)`. The
+ * result is clamped to [0, panelCount-1].
+ */
+function panelIdxFor(el: CanvasElement, panelCount: number): number {
+  const raw =
+    el.type === "device" && typeof el.panelIndex === "number"
+      ? el.panelIndex
+      : Math.floor(el.pos.x);
+  return Math.max(0, Math.min(panelCount - 1, raw));
+}
+
 type Props = {
   template: TemplateConfig;
-  slot: SlotConfig;
-  slotNumber: number;
-  /** Total slots in the template; used for panorama mode slicing. */
-  totalSlots: number;
-  screenshotUrl?: string | null;
+  screenshots: ScreenshotAsset[];
+  selectedElementId?: string | null;
   readOnly?: boolean;
   maxWidthClass?: string;
   /** Override perspective subdivisions; default 20 for live editor. */
   tiltSubdivisions?: number;
-  /** ID of the currently selected element (Transformer wraps this node). */
-  selectedElementId?: string | null;
-  onChange?: (next: SlotConfig) => void;
+  onChange?: (next: TemplateConfig) => void;
   onSelectElement?: (id: string | null) => void;
 };
 
 type EditingState = {
   id: string;
-  /** Centre of the editor in CSS px relative to the wrapper div. */
   left: number;
   top: number;
-  width: number;
-  /** CSS font-size to apply (already scaled to display px). */
   fontSize: number;
   rotation: number;
   weight: number;
@@ -68,14 +116,11 @@ type EditingState = {
 
 export function EditorCanvas({
   template,
-  slot,
-  slotNumber,
-  totalSlots,
-  screenshotUrl,
-  readOnly = false,
-  maxWidthClass = "max-w-md",
-  tiltSubdivisions = 20,
+  screenshots,
   selectedElementId = null,
+  readOnly = false,
+  maxWidthClass = "max-w-6xl",
+  tiltSubdivisions = 20,
   onChange,
   onSelectElement,
 }: Props) {
@@ -83,9 +128,19 @@ export function EditorCanvas({
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
   const editingTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const [displayWidth, setDisplayWidth] = useState(400);
+  const [displayWidth, setDisplayWidth] = useState(800);
   const [editing, setEditing] = useState<EditingState | null>(null);
-  const screenshot = useImage(screenshotUrl ?? null);
+  // While an element is being dragged or transformed, its panel's clip rect
+  // is suppressed so the node stays visible as it crosses into the gap or
+  // into a neighbouring tile. Re-applied on drag/transform end.
+  const [interactingPanelIdx, setInteractingPanelIdx] = useState<number | null>(
+    null
+  );
+
+  const panelCount = Math.max(1, template.panelCount);
+  const canvasW = totalStageWidth(panelCount);
+  const canvasH = PANEL_H;
+
   const bgImageUrl = template.bgImagePath ? `/api/uploads/${template.bgImagePath}` : null;
   const bgImage = useImage(bgImageUrl);
 
@@ -100,50 +155,66 @@ export function EditorCanvas({
     return () => ro.disconnect();
   }, []);
 
-  const scale = displayWidth / CANVAS_WIDTH;
-  const displayHeight = CANVAS_HEIGHT * scale;
-  const fallbackColor = slot.backgroundColor ?? template.backgroundColor;
+  const scale = displayWidth / canvasW;
+  const displayHeight = canvasH * scale;
+  const fallbackColor = template.backgroundColor;
 
-  const bgCanvas = useMemo(
-    () =>
+  // Render the background as N per-panel slices using `gap: 0` so the
+  // editor shows EXACTLY what each exported PNG will contain. The gap
+  // areas between panels stay white (or fallback colour) — the source
+  // image is split into N equal parts of its cover-fit area, with no
+  // source pixels lost between bands. Sliding the panels together would
+  // reconstruct the full cover-fit area continuously.
+  const panelBgs = useMemo(() => {
+    const slot = {
+      devicePos: { x: 0, y: 0 },
+      deviceScale: 1,
+      deviceRotation: 0,
+      deviceTiltX: 0,
+      deviceTiltY: 0,
+      bgImagePan: { x: 0, y: 0 },
+      bgImageZoom: 1,
+      bgImageBlur: 0,
+      bgImageBrightness: 1,
+      elements: [],
+    };
+    return Array.from({ length: panelCount }, (_, i) =>
       renderBackgroundCanvas({
-        width: CANVAS_WIDTH,
-        height: CANVAS_HEIGHT,
+        width: PANEL_W,
+        height: PANEL_H,
         bgImage,
         slot,
         fallbackColor,
-        panorama:
-          template.bgImageMode === "panorama"
-            ? {
-                slotIndex: slotNumber - 1,
-                totalSlots,
-                zoom: template.bgImagePanoZoom,
-                blur: template.bgImagePanoBlur,
-                brightness: template.bgImagePanoBrightness,
-              }
-            : undefined,
-      }),
-    [
-      bgImage,
-      slot,
-      fallbackColor,
-      template.bgImageMode,
-      template.bgImagePanoZoom,
-      template.bgImagePanoBlur,
-      template.bgImagePanoBrightness,
-      slotNumber,
-      totalSlots,
-    ]
-  );
+        panorama: {
+          slotIndex: i,
+          totalSlots: panelCount,
+          gap: 0,
+        },
+      })
+    );
+  }, [bgImage, fallbackColor, panelCount]);
 
-  const deviceX = slot.devicePos.x * CANVAS_WIDTH;
-  const deviceY = slot.devicePos.y * CANVAS_HEIGHT;
+  const selectedElement = template.elements.find((e) => e.id === selectedElementId) ?? null;
 
-  const selectedElement: SlotElement | undefined = slot.elements.find(
-    (e) => e.id === selectedElementId
-  );
+  // Partition every element into the tile it renders inside. Each tile gets
+  // its own Konva.Group with a clip rect, hard-cropping anything that
+  // crosses the tile edge. Devices use their explicit `panelIndex` so the
+  // tile assignment is stable while the user drags them around — dragging
+  // never changes which tile a device belongs to. Text + icons still infer
+  // their tile from `pos.x`.
+  const elementsByPanel = useMemo(() => {
+    const buckets: CanvasElement[][] = Array.from(
+      { length: panelCount },
+      () => []
+    );
+    for (const el of template.elements) {
+      const idx = panelIdxFor(el, panelCount);
+      buckets[idx].push(el);
+    }
+    return buckets;
+  }, [template.elements, panelCount]);
 
-  // ---- Attach/detach Transformer when selection changes ----
+  // ---- Attach/detach Transformer ----
   useEffect(() => {
     const tr = trRef.current;
     if (!tr) return;
@@ -160,28 +231,28 @@ export function EditorCanvas({
     } else {
       tr.nodes([]);
     }
-  }, [selectedElementId, editing, slot.elements]);
+  }, [selectedElementId, editing, template.elements]);
 
-  // Text + icons both expose 4 corners + the rotate handle. Width is auto-
-  // sized from text content (no manual wrap-width handles).
   const transformerAnchors = useMemo(
     () => ["top-left", "top-right", "bottom-left", "bottom-right"],
     []
   );
 
-  function patchElement(id: string, patch: Partial<SlotElement>) {
+  function patchElement(id: string, patch: Partial<CanvasElement>) {
     if (!onChange) return;
-    const elements = slot.elements.map((el) =>
-      el.id === id ? ({ ...el, ...patch } as SlotElement) : el
+    const elements = template.elements.map((el) =>
+      el.id === id ? ({ ...el, ...patch } as CanvasElement) : el
     );
-    onChange({ ...slot, elements });
+    onChange({ ...template, elements });
   }
 
   function handleTransformStart() {
-    // All anchors are corners now; always keep ratio so scaling stays uniform.
     const tr = trRef.current;
     if (!tr) return;
     tr.keepRatio(true);
+    if (selectedElement) {
+      setInteractingPanelIdx(panelIdxFor(selectedElement, panelCount));
+    }
   }
 
   function handleTransformEnd(e: Konva.KonvaEventObject<Event>) {
@@ -189,22 +260,30 @@ export function EditorCanvas({
     const sx = node.scaleX();
     const sy = node.scaleY();
     const rotation = node.rotation();
+
+    const id = node.id();
+    const el = template.elements.find((e) => e.id === id);
+    if (!el) return;
+
+    // Elements live inside a per-tile clip group offset by
+    // `panelIdx * (PANEL_W + PANEL_GAP_PX)`. Add that back so `node.x()`
+    // (which is group-local) converts to the same display-space coord
+    // `displayXToPanelX` expects. For devices the owning tile is fixed
+    // (`el.panelIndex`); for text/icons it's inferred from the pre-drag
+    // `pos.x`.
+    const panelIdx = panelIdxFor(el, panelCount);
+    const groupX = panelIdx * (PANEL_W + PANEL_GAP_PX);
     const newPos = {
-      x: node.x() / CANVAS_WIDTH,
-      y: node.y() / CANVAS_HEIGHT,
+      x: displayXToPanelX(node.x() + groupX, panelCount),
+      y: node.y() / PANEL_H,
     };
-    // Reset scale on the live node so successive transforms compose cleanly.
     node.scaleX(1);
     node.scaleY(1);
 
-    const id = node.id();
-    const el = slot.elements.find((e) => e.id === id);
-    if (!el) return;
     const factor = Math.max(sx, sy);
 
     if (el.type === "text") {
       const newFontSize = Math.max(8, el.fontSize * factor);
-      // Recompute width to hug the (unchanged) text at the new font size.
       const newWidth = autoWidth(el.text, {
         fontSize: newFontSize,
         fontFamily: fontFamilyOf(el, template),
@@ -217,6 +296,15 @@ export function EditorCanvas({
         rotation,
         pos: newPos,
       });
+    } else if (el.type === "device") {
+      patchElement(id, {
+        size: Math.max(0.05, el.size * factor),
+        rotation,
+        pos: newPos,
+        // Lock the device's tile so a transform near the edge doesn't
+        // re-partition it into an adjacent tile.
+        panelIndex: panelIdx,
+      });
     } else {
       patchElement(id, {
         size: Math.max(12, el.size * factor),
@@ -224,13 +312,14 @@ export function EditorCanvas({
         pos: newPos,
       });
     }
+    setInteractingPanelIdx(null);
   }
 
   // ---- Inline text editor ----
   function beginEditingText(el: TextElement) {
     if (!stageRef.current || !wrapperRef.current) return;
-    const cx = el.pos.x * CANVAS_WIDTH;
-    const cy = el.pos.y * CANVAS_HEIGHT;
+    const cx = panelXToDisplayX(el.pos.x, panelCount);
+    const cy = el.pos.y * PANEL_H;
     const screenCx = cx * scale;
     const screenCy = cy * scale;
     const screenFont = el.fontSize * scale;
@@ -238,11 +327,8 @@ export function EditorCanvas({
 
     setEditing({
       id: el.id,
-      // Anchor the textarea at the centre and use CSS translate(-50%,-50%)
-      // so it stays centred regardless of how it grows as the user types.
       left: screenCx,
       top: screenCy,
-      width: 0, // unused — relying on auto-sized contenteditable below
       fontSize: screenFont,
       rotation: el.rotation,
       weight: el.weight,
@@ -264,9 +350,6 @@ export function EditorCanvas({
   }, [editing]);
 
   function sizeTextarea(ta: HTMLTextAreaElement, e: EditingState) {
-    // Auto-grow horizontally: width = widest line's px width + a few px
-    // padding. We measure in display-space (scaled) px so it tracks the
-    // textarea's own rendered fontSize.
     const widestPx = measureTextPx(ta.value, {
       fontSize: e.fontSize,
       fontFamily: e.fontFamily,
@@ -274,7 +357,6 @@ export function EditorCanvas({
       italic: e.italic,
     });
     ta.style.width = `${Math.max(20, widestPx + 8)}px`;
-    // Auto-grow vertically: clamp to scrollHeight.
     ta.style.height = "auto";
     ta.style.height = `${ta.scrollHeight}px`;
   }
@@ -282,13 +364,11 @@ export function EditorCanvas({
   function commitEdit() {
     if (!editing) return;
     const next = editingTextareaRef.current?.value ?? editing.initialText;
-    const el = slot.elements.find((e) => e.id === editing.id);
+    const el = template.elements.find((e) => e.id === editing.id);
     if (!el || el.type !== "text") {
       setEditing(null);
       return;
     }
-    // Update both text and the auto-fit width so the rendered Konva.Text
-    // hugs the new content.
     const newWidth = autoWidth(next, {
       fontSize: el.fontSize,
       fontFamily: fontFamilyOf(el, template),
@@ -307,7 +387,7 @@ export function EditorCanvas({
     <div
       ref={wrapperRef}
       className={`relative w-full ${maxWidthClass} mx-auto`}
-      style={{ aspectRatio: `${CANVAS_WIDTH} / ${CANVAS_HEIGHT}` }}
+      style={{ aspectRatio: `${canvasW} / ${canvasH}` }}
     >
       <Stage
         ref={stageRef}
@@ -320,160 +400,211 @@ export function EditorCanvas({
           if (readOnly || !onSelectElement) return;
           const target = e.target;
           const stage = target.getStage();
-          // Click on empty stage, the bg image, or anything not an element.
           if (target === stage || target.name() === "bg") {
             onSelectElement(null);
           }
         }}
       >
         <Layer>
+          {/* Stage backdrop — fills gap regions with white (or fallback). */}
           <KonvaImage
-            image={bgCanvas}
+            image={undefined}
             x={0}
             y={0}
-            width={CANVAS_WIDTH}
-            height={CANVAS_HEIGHT}
+            width={canvasW}
+            height={canvasH}
+            fill="#ffffff"
             name="bg"
             listening={!readOnly}
           />
 
-          <Group
-            x={deviceX}
-            y={deviceY}
-            scaleX={slot.deviceScale}
-            scaleY={slot.deviceScale}
-            rotation={slot.deviceRotation}
-            draggable={!readOnly}
-            onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
-              if (!onChange) return;
-              const node = e.target;
-              onChange({
-                ...slot,
-                devicePos: {
-                  x: node.x() / CANVAS_WIDTH,
-                  y: node.y() / CANVAS_HEIGHT,
-                },
-              });
-            }}
-          >
-            <DeviceFrame
-              slotNumber={slotNumber}
-              screenshot={screenshot}
-              bezelColor={template.bezelColor}
-              cornerRadius={template.bezelCornerRadius}
-              tiltX={slot.deviceTiltX}
-              tiltY={slot.deviceTiltY}
-              subdivisions={tiltSubdivisions}
+          {/* Per-panel bg slices, drawn at gap-shifted display positions. */}
+          {panelBgs.map((bg, i) => (
+            <KonvaImage
+              key={`bg-${i}`}
+              image={bg}
+              x={i * (PANEL_W + PANEL_GAP_PX)}
+              y={0}
+              width={PANEL_W}
+              height={PANEL_H}
+              name="bg"
+              listening={!readOnly}
             />
-          </Group>
+          ))}
 
-          {slot.elements.map((el) => {
-            if (el.type === "text") {
-              const blockW = el.width * CANVAS_WIDTH;
-              const cx = el.pos.x * CANVAS_WIDTH;
-              const cy = el.pos.y * CANVAS_HEIGHT;
-              const isEditing = editing?.id === el.id;
-              if (isEditing) return null; // hidden while overlay is active
-              return (
-                <Text
-                  key={el.id}
-                  id={el.id}
-                  x={cx}
-                  y={cy}
-                  width={blockW}
-                  offsetX={blockW / 2}
-                  offsetY={el.fontSize * 0.6}
-                  rotation={el.rotation}
-                  align={el.align}
-                  text={el.text}
-                  fontSize={el.fontSize}
-                  fontFamily={fontFamilyOf(el, template)}
-                  fontStyle={`${el.italic ? "italic " : ""}${el.weight}`}
-                  fill={el.color}
-                  draggable={!readOnly}
-                  onMouseDown={(e) => {
-                    if (readOnly || !onSelectElement) return;
-                    e.cancelBubble = true;
-                    onSelectElement(el.id);
-                  }}
-                  onDblClick={() => {
-                    if (readOnly) return;
-                    beginEditingText(el);
-                  }}
-                  onDblTap={() => {
-                    if (readOnly) return;
-                    beginEditingText(el);
-                  }}
-                  onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
-                    const node = e.target;
-                    patchElement(el.id, {
-                      pos: {
-                        x: node.x() / CANVAS_WIDTH,
-                        y: node.y() / CANVAS_HEIGHT,
-                      },
-                    });
-                  }}
-                  onTransformStart={handleTransformStart}
-                  onTransformEnd={handleTransformEnd}
-                />
-              );
-            }
-            // Custom (uploaded SVG) icon — render via Konva.Image.
-            if (isCustomIcon(el.icon)) {
-              return (
-                <CustomIconNode
-                  key={el.id}
-                  el={el}
-                  readOnly={readOnly}
-                  onSelect={(id) => onSelectElement?.(id)}
-                  onMove={(id, pos) => patchElement(id, { pos })}
-                  onTransformStart={handleTransformStart}
-                  onTransformEnd={handleTransformEnd}
-                />
-              );
-            }
-            // Built-in icon — render via Konva.Path.
-            const def = ICONS[el.icon];
-            if (!def) return null;
-            const cx = el.pos.x * CANVAS_WIDTH;
-            const cy = el.pos.y * CANVAS_HEIGHT;
-            const iconScale = el.size / ICON_VIEWBOX_SIZE;
+          {/* One clip group per panel — Konva enforces a rectangular clip
+              at the tile bounds, so a device near the right edge of tile N
+              is cut at the gap instead of bleeding into the next tile.
+              While an element in this panel is being dragged or transformed,
+              the clip is dropped so the node stays visible past the edge. */}
+          {elementsByPanel.map((panelElements, panelIdx) => {
+            const clipProps =
+              interactingPanelIdx === panelIdx
+                ? {}
+                : {
+                    clipX: 0,
+                    clipY: 0,
+                    clipWidth: PANEL_W,
+                    clipHeight: PANEL_H,
+                  };
             return (
-              <Path
-                key={el.id}
-                id={el.id}
-                x={cx}
-                y={cy}
-                data={def.path}
-                fill={def.stroke ? undefined : el.color}
-                stroke={def.stroke ? el.color : undefined}
-                strokeWidth={def.stroke ? 2 : 0}
-                strokeScaleEnabled={false}
-                lineCap="round"
-                lineJoin="round"
-                scaleX={iconScale}
-                scaleY={iconScale}
-                offsetX={ICON_VIEWBOX_SIZE / 2}
-                offsetY={ICON_VIEWBOX_SIZE / 2}
-                rotation={el.rotation}
-                draggable={!readOnly}
-                onMouseDown={(e) => {
-                  if (readOnly || !onSelectElement) return;
-                  e.cancelBubble = true;
-                  onSelectElement(el.id);
-                }}
-                onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
-                  const node = e.target;
-                  patchElement(el.id, {
-                    pos: {
-                      x: node.x() / CANVAS_WIDTH,
-                      y: node.y() / CANVAS_HEIGHT,
-                    },
-                  });
-                }}
-                onTransformStart={handleTransformStart}
-                onTransformEnd={handleTransformEnd}
-              />
+            <Group
+              key={`panel-${panelIdx}`}
+              x={panelIdx * (PANEL_W + PANEL_GAP_PX)}
+              y={0}
+              {...clipProps}
+            >
+              {panelElements.map((el) => {
+                if (el.type === "text") {
+                  const blockW = el.width * PANEL_W;
+                  const cx = (el.pos.x - panelIdx) * PANEL_W;
+                  const cy = el.pos.y * PANEL_H;
+                  const isEditing = editing?.id === el.id;
+                  if (isEditing) return null;
+                  return (
+                    <Text
+                      key={el.id}
+                      id={el.id}
+                      x={cx}
+                      y={cy}
+                      width={blockW}
+                      offsetX={blockW / 2}
+                      offsetY={el.fontSize * 0.6}
+                      rotation={el.rotation}
+                      align={el.align}
+                      text={el.text}
+                      fontSize={el.fontSize}
+                      fontFamily={fontFamilyOf(el, template)}
+                      fontStyle={`${el.italic ? "italic " : ""}${el.weight}`}
+                      fill={el.color}
+                      draggable={!readOnly}
+                      onMouseDown={(e) => {
+                        if (readOnly || !onSelectElement) return;
+                        e.cancelBubble = true;
+                        onSelectElement(el.id);
+                      }}
+                      onDblClick={() => {
+                        if (readOnly) return;
+                        beginEditingText(el);
+                      }}
+                      onDblTap={() => {
+                        if (readOnly) return;
+                        beginEditingText(el);
+                      }}
+                      onDragStart={() => setInteractingPanelIdx(panelIdx)}
+                      onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+                        const node = e.target;
+                        const displayX =
+                          node.x() + panelIdx * (PANEL_W + PANEL_GAP_PX);
+                        patchElement(el.id, {
+                          pos: {
+                            x: displayXToPanelX(displayX, panelCount),
+                            y: node.y() / PANEL_H,
+                          },
+                        });
+                        setInteractingPanelIdx(null);
+                      }}
+                      onTransformStart={handleTransformStart}
+                      onTransformEnd={handleTransformEnd}
+                    />
+                  );
+                }
+
+                if (el.type === "device") {
+                  return (
+                    <DeviceNode
+                      key={el.id}
+                      el={el}
+                      template={template}
+                      screenshots={screenshots}
+                      readOnly={readOnly}
+                      tiltSubdivisions={tiltSubdivisions}
+                      panelCount={panelCount}
+                      panelIdx={panelIdx}
+                      onSelect={(id) => onSelectElement?.(id)}
+                      onMove={(id, pos) => {
+                        // Lock the device's tile to whichever group it's
+                        // currently rendered in. Prevents drag from
+                        // re-partitioning the device into a neighbouring
+                        // tile just because its centre crossed an edge.
+                        patchElement(id, { pos, panelIndex: panelIdx });
+                        setInteractingPanelIdx(null);
+                      }}
+                      onDragStart={() => setInteractingPanelIdx(panelIdx)}
+                      onTransformStart={handleTransformStart}
+                      onTransformEnd={handleTransformEnd}
+                    />
+                  );
+                }
+
+                // Icon element
+                if (isCustomIcon(el.icon)) {
+                  return (
+                    <CustomIconNode
+                      key={el.id}
+                      el={el}
+                      readOnly={readOnly}
+                      panelCount={panelCount}
+                      panelIdx={panelIdx}
+                      onSelect={(id) => onSelectElement?.(id)}
+                      onMove={(id, pos) => {
+                        patchElement(id, { pos });
+                        setInteractingPanelIdx(null);
+                      }}
+                      onDragStart={() => setInteractingPanelIdx(panelIdx)}
+                      onTransformStart={handleTransformStart}
+                      onTransformEnd={handleTransformEnd}
+                    />
+                  );
+                }
+                const def = ICONS[el.icon];
+                if (!def) return null;
+                const cx = (el.pos.x - panelIdx) * PANEL_W;
+                const cy = el.pos.y * PANEL_H;
+                const iconScale = el.size / ICON_VIEWBOX_SIZE;
+                return (
+                  <Path
+                    key={el.id}
+                    id={el.id}
+                    x={cx}
+                    y={cy}
+                    data={def.path}
+                    fill={def.stroke ? undefined : el.color}
+                    stroke={def.stroke ? el.color : undefined}
+                    strokeWidth={def.stroke ? 2 : 0}
+                    strokeScaleEnabled={false}
+                    lineCap="round"
+                    lineJoin="round"
+                    scaleX={iconScale}
+                    scaleY={iconScale}
+                    offsetX={ICON_VIEWBOX_SIZE / 2}
+                    offsetY={ICON_VIEWBOX_SIZE / 2}
+                    rotation={el.rotation}
+                    draggable={!readOnly}
+                    onMouseDown={(e) => {
+                      if (readOnly || !onSelectElement) return;
+                      e.cancelBubble = true;
+                      onSelectElement(el.id);
+                    }}
+                    onDragStart={() => setInteractingPanelIdx(panelIdx)}
+                    onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+                      const node = e.target;
+                      const displayX =
+                        node.x() + panelIdx * (PANEL_W + PANEL_GAP_PX);
+                      patchElement(el.id, {
+                        pos: {
+                          x: displayXToPanelX(displayX, panelCount),
+                          y: node.y() / PANEL_H,
+                        },
+                      });
+                      setInteractingPanelIdx(null);
+                    }}
+                    onTransformStart={handleTransformStart}
+                    onTransformEnd={handleTransformEnd}
+                  />
+                );
+              })}
+            </Group>
             );
           })}
 
@@ -512,8 +643,6 @@ export function EditorCanvas({
             position: "absolute",
             left: editing.left,
             top: editing.top,
-            // Centre the textarea on (left, top) and rotate around its centre
-            // so it tracks the text element as it grows during typing.
             transform: `translate(-50%, -50%) rotate(${editing.rotation}deg)`,
             transformOrigin: "50% 50%",
             fontSize: editing.fontSize,
@@ -540,34 +669,112 @@ export function EditorCanvas({
 }
 
 /**
- * Render a user-uploaded SVG icon. Uses Konva.Image so the SVG keeps its
- * own colours / multi-path detail. Aspect ratio is preserved with `size`
- * meaning the longest edge.
+ * A DeviceElement rendered as a Konva.Image of the warped device canvas.
+ * Pulls its screenshot from the project's screenshots pool by id.
  */
+function DeviceNode({
+  el,
+  template,
+  screenshots,
+  readOnly,
+  tiltSubdivisions,
+  panelCount,
+  panelIdx,
+  onSelect,
+  onMove,
+  onDragStart,
+  onTransformStart,
+  onTransformEnd,
+}: {
+  el: DeviceElement;
+  template: TemplateConfig;
+  screenshots: ScreenshotAsset[];
+  readOnly: boolean;
+  tiltSubdivisions: number;
+  panelCount: number;
+  panelIdx: number;
+  onSelect: (id: string) => void;
+  onMove: (id: string, pos: { x: number; y: number }) => void;
+  onDragStart?: () => void;
+  onTransformStart: () => void;
+  onTransformEnd: (e: Konva.KonvaEventObject<Event>) => void;
+}) {
+  const screenshotPath = el.screenshotId
+    ? screenshots.find((s) => s.id === el.screenshotId)?.path
+    : undefined;
+  const screenshotUrl = screenshotPath ? `/api/uploads/${screenshotPath}` : null;
+  const screenshot = useImage(screenshotUrl);
+
+  // Panel-local coords — this node lives inside the panel's clip Group.
+  const cx = (el.pos.x - panelIdx) * PANEL_W;
+  const cy = el.pos.y * PANEL_H;
+  const deviceScale = (el.size * PANEL_W) / BEZEL_W;
+
+  return (
+    <Group
+      id={el.id}
+      x={cx}
+      y={cy}
+      scaleX={deviceScale}
+      scaleY={deviceScale}
+      rotation={el.rotation}
+      draggable={!readOnly}
+      onMouseDown={(e) => {
+        if (readOnly) return;
+        e.cancelBubble = true;
+        onSelect(el.id);
+      }}
+      onDragStart={onDragStart}
+      onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+        const node = e.target;
+        const displayX = node.x() + panelIdx * (PANEL_W + PANEL_GAP_PX);
+        onMove(el.id, {
+          x: displayXToPanelX(displayX, panelCount),
+          y: node.y() / PANEL_H,
+        });
+      }}
+      onTransformStart={onTransformStart}
+      onTransformEnd={onTransformEnd}
+    >
+      <DeviceFrame
+        slotNumber={0}
+        screenshot={screenshot}
+        bezelColor={template.bezelColor}
+        cornerRadius={template.bezelCornerRadius ?? CORNER_RADIUS}
+        tiltX={el.tiltX}
+        tiltY={el.tiltY}
+        subdivisions={tiltSubdivisions}
+      />
+    </Group>
+  );
+}
+
 function CustomIconNode({
   el,
   readOnly,
+  panelCount,
+  panelIdx,
   onSelect,
   onMove,
+  onDragStart,
   onTransformStart,
   onTransformEnd,
 }: {
   el: IconElement;
   readOnly: boolean;
+  panelCount: number;
+  panelIdx: number;
   onSelect: (id: string) => void;
   onMove: (id: string, pos: { x: number; y: number }) => void;
+  onDragStart?: () => void;
   onTransformStart: () => void;
   onTransformEnd: (e: Konva.KonvaEventObject<Event>) => void;
 }) {
   const url = `/api/uploads/${customIconPath(el.icon)}`;
   const image = useImage(url);
 
-  const cx = el.pos.x * CANVAS_WIDTH;
-  const cy = el.pos.y * CANVAS_HEIGHT;
-
-  // Aspect-preserving dimensions: longest edge of the rendered icon equals
-  // `el.size`. The other axis shrinks proportionally so non-square SVGs
-  // don't stretch.
+  const cx = (el.pos.x - panelIdx) * PANEL_W;
+  const cy = el.pos.y * PANEL_H;
   let w = el.size;
   let h = el.size;
   if (image && image.width > 0 && image.height > 0) {
@@ -597,11 +804,13 @@ function CustomIconNode({
         e.cancelBubble = true;
         onSelect(el.id);
       }}
+      onDragStart={onDragStart}
       onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
         const node = e.target;
+        const displayX = node.x() + panelIdx * (PANEL_W + PANEL_GAP_PX);
         onMove(el.id, {
-          x: node.x() / CANVAS_WIDTH,
-          y: node.y() / CANVAS_HEIGHT,
+          x: displayXToPanelX(displayX, panelCount),
+          y: node.y() / PANEL_H,
         });
       }}
       onTransformStart={onTransformStart}
@@ -609,3 +818,6 @@ function CustomIconNode({
     />
   );
 }
+
+// Avoid an unused-warning for BEZEL_H import; some bundlers complain.
+void BEZEL_H;

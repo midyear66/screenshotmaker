@@ -2,12 +2,8 @@
 
 import JSZip from "jszip";
 import { useState } from "react";
-import {
-  parseSlotConfig,
-  parseTemplateConfig,
-  SlotConfig,
-} from "@/lib/editor-types";
-import { DEVICE_SIZES, renderSlotToBlob } from "@/lib/render";
+import { parseTemplateConfig } from "@/lib/editor-types";
+import { DEVICE_SIZES, renderPanelToBlob } from "@/lib/render";
 
 export type ProjectPayload = {
   id: string;
@@ -15,10 +11,13 @@ export type ProjectPayload = {
   template: {
     id: string;
     name: string;
+    /** Legacy field kept for ExportButton's old type; unused in panel-mode. */
     slotCount: number;
     config: string;
+    /** Legacy; the new model reads everything from config. */
     slots: { id: string; order: number; config: string }[];
   };
+  /** Legacy; the new model reads screenshots from config.screenshots. */
   screens: { id: string; slotOrder: number; screenshotPath: string }[];
 };
 
@@ -40,36 +39,24 @@ export function ExportButton({
     setBusy(true);
     try {
       const templateConfig = parseTemplateConfig(project.template.config);
-      const slots = project.template.slots
-        .slice()
-        .sort((a, b) => a.order - b.order)
-        .map((s) => {
-          const screen = project.screens.find((sc) => sc.slotOrder === s.order);
-          return {
-            order: s.order,
-            config: parseSlotConfig(s.config) as SlotConfig,
-            screenshotUrl: screen ? `/api/uploads/${screen.screenshotPath}` : null,
-          };
-        });
-
-      const total = slots.length * DEVICE_SIZES.length;
+      const panelCount = Math.max(1, templateConfig.panelCount);
+      const total = panelCount * DEVICE_SIZES.length;
       let done = 0;
       const zip = new JSZip();
       const root = zip.folder(sanitizeFilename(project.name))!;
 
       for (const device of DEVICE_SIZES) {
         const folder = root.folder(device.folder)!;
-        for (const slot of slots) {
-          setStatus(`Rendering ${device.label} · slot ${slot.order} (${done + 1}/${total})`);
-          const blob = await renderSlotToBlob({
+        for (let panelIndex = 0; panelIndex < panelCount; panelIndex++) {
+          setStatus(
+            `Rendering ${device.label} · panel ${panelIndex + 1} (${done + 1}/${total})`
+          );
+          const blob = await renderPanelToBlob({
             template: templateConfig,
-            slot: slot.config,
-            slotNumber: slot.order,
-            totalSlots: slots.length,
-            screenshotUrl: slot.screenshotUrl,
+            panelIndex,
             device,
           });
-          const name = `${String(slot.order).padStart(2, "0")}.png`;
+          const name = `${String(panelIndex + 1).padStart(2, "0")}.png`;
           folder.file(name, blob);
           done++;
         }
@@ -106,7 +93,7 @@ export function ExportButton({
         onClick={exportAll}
         disabled={!ready || busy}
         className="text-sm px-4 py-2 rounded-md bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 disabled:opacity-40 hover:opacity-90"
-        title={!ready ? "Fill every slot first" : "Export App Store–ready PNGs"}
+        title={!ready ? "Fill every panel first" : "Export App Store–ready PNGs"}
       >
         {busy ? "Exporting…" : "Export ZIP"}
       </button>
