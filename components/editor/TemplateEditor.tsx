@@ -484,6 +484,43 @@ export function TemplateEditor({
             {templateConfig.panelCount === 1 ? "" : "s"}; each export PNG gets
             its slice.
           </p>
+
+          {hasBg && (
+            <>
+              <Label className="mt-3">Bg zoom</Label>
+              <Slider
+                min={1}
+                max={3}
+                step={0.05}
+                value={templateConfig.bgImagePanoZoom}
+                onChange={(v) =>
+                  updateConfig((c) => ({ ...c, bgImagePanoZoom: v }))
+                }
+              />
+
+              <Label className="mt-2">Bg blur</Label>
+              <Slider
+                min={0}
+                max={60}
+                step={1}
+                value={Math.round(templateConfig.bgImagePanoBlur)}
+                onChange={(v) =>
+                  updateConfig((c) => ({ ...c, bgImagePanoBlur: v }))
+                }
+              />
+
+              <Label className="mt-2">Bg brightness</Label>
+              <Slider
+                min={0}
+                max={1.5}
+                step={0.05}
+                value={templateConfig.bgImagePanoBrightness}
+                onChange={(v) =>
+                  updateConfig((c) => ({ ...c, bgImagePanoBrightness: v }))
+                }
+              />
+            </>
+          )}
         </Section>
 
         <Section title="Screenshots pool">

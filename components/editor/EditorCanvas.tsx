@@ -176,11 +176,23 @@ export function EditorCanvas({
         panorama: {
           slotIndex: i,
           totalSlots: panelCount,
+          // Template-wide pano controls — same values the export uses, so
+          // the editor preview matches each exported PNG.
+          zoom: template.bgImagePanoZoom,
+          blur: template.bgImagePanoBlur,
+          brightness: template.bgImagePanoBrightness,
           gap: 0,
         },
       })
     );
-  }, [bgImage, fallbackColor, panelCount]);
+  }, [
+    bgImage,
+    fallbackColor,
+    panelCount,
+    template.bgImagePanoZoom,
+    template.bgImagePanoBlur,
+    template.bgImagePanoBrightness,
+  ]);
 
   const selectedElement = template.elements.find((e) => e.id === selectedElementId) ?? null;
 
