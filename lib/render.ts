@@ -10,6 +10,7 @@ import {
   TemplateConfig,
   isCustomIcon,
   customIconPath,
+  panelIdxFor,
 } from "@/lib/editor-types";
 import { renderBackgroundCanvas } from "@/lib/background";
 import {
@@ -44,22 +45,6 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
     img.src = url;
   });
-}
-
-/**
- * Half of an element's bounding-box width, expressed in panel-x units
- * (i.e., fraction of PANEL_W). Used to decide which panels the element
- * overlaps and how much to clamp its position so each panel renders it
- * whole.
- *
- * TextElement: `width` is already in panel-x units (fraction of PANEL_W).
- * IconElement: `size` is in canvas-px, so divide by PANEL_W.
- * DeviceElement: `size` is fraction of PANEL_W already.
- */
-function elementHalfPanelWidth(el: CanvasElement): number {
-  if (el.type === "text") return el.width / 2;
-  if (el.type === "icon") return el.size / 2 / PANEL_W;
-  return el.size / 2;
 }
 
 /** Load all screenshots referenced by DeviceElements in one pass. */
@@ -169,17 +154,14 @@ export async function renderPanelToBlob(args: {
       })
     );
 
-    // ---- Elements: render at natural panel-local position; Konva clips at
-    // the stage edges. This means an element whose bounding box crosses a
-    // panel boundary appears as a fragment in the adjacent panel(s) —
-    // matching the AppScreenStudio aesthetic where adjacent panels visually
-    // connect (each panel shows its own content plus small edge slivers of
-    // any elements that overflow from its neighbours).
+    // ---- Elements: render only the elements that belong to THIS tile,
+    // partitioned the same way as the editor (`panelIdxFor`). Devices use
+    // their explicit `panelIndex`; text + icons use `Math.floor(pos.x)`.
+    // Elements that extend past the tile edge (e.g. a phone positioned near
+    // the right edge of its tile) get clipped by Konva's stage-canvas
+    // bounds — the stage is exactly one tile wide.
     for (const el of template.elements) {
-      const halfPanelX = elementHalfPanelWidth(el);
-      // Cheap optimisation: skip elements clearly outside this panel.
-      if (el.pos.x + halfPanelX <= panelIndex) continue;
-      if (el.pos.x - halfPanelX >= panelIndex + 1) continue;
+      if (panelIdxFor(el, panelCount) !== panelIndex) continue;
 
       const xPanel = (el.pos.x - panelIndex) * device.width;
       const yPanel = el.pos.y * device.height;

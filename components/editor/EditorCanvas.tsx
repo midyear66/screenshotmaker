@@ -23,6 +23,7 @@ import {
   ScreenshotAsset,
   isCustomIcon,
   customIconPath,
+  panelIdxFor,
 } from "@/lib/editor-types";
 import { renderBackgroundCanvas } from "@/lib/background";
 import { ICON_VIEWBOX_SIZE, ICONS } from "@/lib/icons";
@@ -73,19 +74,6 @@ function displayXToPanelX(displayX: number, panelCount: number): number {
 
 function totalStageWidth(panelCount: number): number {
   return panelCount * PANEL_W + Math.max(0, panelCount - 1) * PANEL_GAP_PX;
-}
-
-/**
- * Tile a given element renders inside. Devices use their explicit
- * `panelIndex`; everything else falls back to `Math.floor(pos.x)`. The
- * result is clamped to [0, panelCount-1].
- */
-function panelIdxFor(el: CanvasElement, panelCount: number): number {
-  const raw =
-    el.type === "device" && typeof el.panelIndex === "number"
-      ? el.panelIndex
-      : Math.floor(el.pos.x);
-  return Math.max(0, Math.min(panelCount - 1, raw));
 }
 
 type Props = {

@@ -312,6 +312,20 @@ export function parseTemplateConfig(raw: string | null | undefined): TemplateCon
   }
 }
 
+/**
+ * Tile a given element renders inside. Devices use their explicit
+ * `panelIndex`; everything else falls back to `Math.floor(pos.x)`. The
+ * result is clamped to [0, panelCount-1]. Editor preview and PNG export
+ * both call this so the same element ends up in exactly one tile.
+ */
+export function panelIdxFor(el: CanvasElement, panelCount: number): number {
+  const raw =
+    el.type === "device" && typeof el.panelIndex === "number"
+      ? el.panelIndex
+      : Math.floor(el.pos.x);
+  return Math.max(0, Math.min(panelCount - 1, raw));
+}
+
 /** Has the project been migrated to the continuous-canvas model? */
 export function isMigratedConfig(config: TemplateConfig): boolean {
   return (
