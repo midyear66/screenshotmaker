@@ -273,8 +273,15 @@ export function EditorCanvas({
     // `pos.x`.
     const panelIdx = panelIdxFor(el, panelCount);
     const groupX = panelIdx * (PANEL_W + PANEL_GAP_PX);
+    // Devices are tile-locked via `panelIndex`, so their `pos.x` is just
+    // a continuous coord relative to the tile's left edge — no need to
+    // snap out of the gap region. Other element types still infer their
+    // tile from `pos.x`, so they go through `displayXToPanelX`.
     const newPos = {
-      x: displayXToPanelX(node.x() + groupX, panelCount),
+      x:
+        el.type === "device"
+          ? panelIdx + node.x() / PANEL_W
+          : displayXToPanelX(node.x() + groupX, panelCount),
       y: node.y() / PANEL_H,
     };
     node.scaleX(1);
@@ -727,9 +734,10 @@ function DeviceNode({
       onDragStart={onDragStart}
       onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
         const node = e.target;
-        const displayX = node.x() + panelIdx * (PANEL_W + PANEL_GAP_PX);
+        // Tile-locked: skip the gap-snap that displayXToPanelX applies
+        // for elements that infer their tile from pos.x.
         onMove(el.id, {
-          x: displayXToPanelX(displayX, panelCount),
+          x: panelIdx + node.x() / PANEL_W,
           y: node.y() / PANEL_H,
         });
       }}
