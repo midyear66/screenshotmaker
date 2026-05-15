@@ -22,7 +22,18 @@
 
 # misc
 .DS_Store
+Thumbs.db
 *.pem
+*.bak
+*~
+
+# editors / IDEs
+.idea/
+.vscode/
+*.swp
+
+# turbopack cache
+.turbo/
 
 # debug
 npm-debug.log*
@@ -40,7 +51,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# runtime data (sqlite + uploads)
-/data/screenshotmaker.db
-/data/screenshotmaker.db-journal
-/data/uploads/
+# runtime data (sqlite + uploads + anything else under data/)
+/data/
