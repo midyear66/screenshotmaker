@@ -77,6 +77,12 @@ export type TemplateConfig = {
   /** Pool of uploaded screenshots; DeviceElement.screenshotId references these. */
   screenshots: ScreenshotAsset[];
   /**
+   * Project-wide default drop shadow applied to every text element that
+   * doesn't carry its own `shadow` override. `undefined` = no project
+   * default (per-element shadows still render normally).
+   */
+  defaultTextShadow?: TextShadow;
+  /**
    * Numeric marker tracking which one-shot migrations have been applied.
    * Older projects open with a smaller value (or undefined → 0) and the
    * migration helper applies any missing steps before returning.
@@ -131,12 +137,25 @@ export type TextElement = {
   /** Degrees, rotated around the text block's centre. */
   rotation: number;
   /**
-   * Optional drop shadow. All distances are in panel-space (1290-wide
-   * canvas) so they scale uniformly at export time alongside `fontSize`.
-   * `undefined` means no shadow.
+   * Optional drop shadow override. All distances are in panel-space (1290-
+   * wide canvas) so they scale uniformly at export time alongside `fontSize`.
+   * `undefined` means "inherit from `TemplateConfig.defaultTextShadow`" —
+   * use `effectiveTextShadow` to resolve.
    */
   shadow?: TextShadow;
 };
+
+/**
+ * Resolve the drop shadow that should actually render for a given text
+ * element: the element's own override if set, otherwise the project-wide
+ * default. Returns `undefined` if neither is set.
+ */
+export function effectiveTextShadow(
+  el: TextElement,
+  template: { defaultTextShadow?: TextShadow }
+): TextShadow | undefined {
+  return el.shadow ?? template.defaultTextShadow;
+}
 
 export type TextShadow = {
   color: string;

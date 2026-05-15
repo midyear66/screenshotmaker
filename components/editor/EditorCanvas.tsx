@@ -23,6 +23,7 @@ import {
   ScreenshotAsset,
   isCustomIcon,
   customIconPath,
+  effectiveTextShadow,
   panelIdxFor,
 } from "@/lib/editor-types";
 import { renderBackgroundCanvas } from "@/lib/background";
@@ -38,6 +39,13 @@ function fontFamilyOf(el: TextElement, template: TemplateConfig): string {
 
 /** Use the shared constant. */
 const PANEL_GAP_PX = PANEL_GAP_PX_FROM_TYPES;
+
+/**
+ * Multiplier for vertical spacing between lines, applied to `fontSize`. Kept
+ * in sync with the textarea's inline `lineHeight` in the inline editor and
+ * with the exporter (`lib/render.ts`).
+ */
+const TEXT_LINE_HEIGHT = 1.2;
 
 function panelXToDisplayX(panelX: number, panelCount: number): number {
   // Each integer boundary crossed adds one gap of shift. Clamp the gap count
@@ -507,6 +515,16 @@ export function EditorCanvas({
                   const cy = el.pos.y * PANEL_H;
                   const isEditing = editing?.id === el.id;
                   if (isEditing) return null;
+                  const shadow = effectiveTextShadow(el, template);
+                  // Block height = lineCount * fontSize * lineHeight. We
+                  // anchor at the vertical centre of the whole block so
+                  // multi-line text stays centred on its `pos` (the rotate
+                  // and resize handles otherwise drift downward with each
+                  // extra line). For a single line this reduces to the
+                  // previous `fontSize * 0.6` so existing data doesn't
+                  // visually shift.
+                  const lineCount = Math.max(1, el.text.split("\n").length);
+                  const offsetYPx = (lineCount * el.fontSize * TEXT_LINE_HEIGHT) / 2;
                   return (
                     <Text
                       key={el.id}
@@ -515,20 +533,21 @@ export function EditorCanvas({
                       y={cy}
                       width={blockW}
                       offsetX={blockW / 2}
-                      offsetY={el.fontSize * 0.6}
+                      offsetY={offsetYPx}
                       rotation={el.rotation}
                       align={el.align}
                       text={el.text}
                       fontSize={el.fontSize}
+                      lineHeight={TEXT_LINE_HEIGHT}
                       fontFamily={fontFamilyOf(el, template)}
                       fontStyle={`${el.italic ? "italic " : ""}${el.weight}`}
                       fill={el.color}
-                      shadowEnabled={!!el.shadow}
-                      shadowColor={el.shadow?.color}
-                      shadowBlur={el.shadow?.blur}
-                      shadowOffsetX={el.shadow?.offsetX}
-                      shadowOffsetY={el.shadow?.offsetY}
-                      shadowOpacity={el.shadow?.opacity}
+                      shadowEnabled={!!shadow}
+                      shadowColor={shadow?.color}
+                      shadowBlur={shadow?.blur}
+                      shadowOffsetX={shadow?.offsetX}
+                      shadowOffsetY={shadow?.offsetY}
+                      shadowOpacity={shadow?.opacity}
                       draggable={!readOnly}
                       onMouseDown={(e) => {
                         if (readOnly || !onSelectElement) return;
@@ -682,7 +701,10 @@ export function EditorCanvas({
           onInput={(e) => sizeTextarea(e.currentTarget, editing)}
           onBlur={commitEdit}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            // Plain Enter inserts a newline (default textarea behaviour, so
+            // we let it through). Commit on ⌘/Ctrl+Enter and on blur;
+            // Escape cancels.
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               commitEdit();
             } else if (e.key === "Escape") {

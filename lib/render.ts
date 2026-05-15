@@ -10,6 +10,7 @@ import {
   TemplateConfig,
   isCustomIcon,
   customIconPath,
+  effectiveTextShadow,
   panelIdxFor,
 } from "@/lib/editor-types";
 import { renderBackgroundCanvas } from "@/lib/background";
@@ -211,18 +212,27 @@ function renderText(
 ) {
   const blockW = el.width * PANEL_W * xScale;
   const fontPx = el.fontSize * xScale;
-  const shadow = el.shadow;
+  // Falls back to the project-wide `defaultTextShadow` when the element has
+  // no per-element override (same resolution the editor preview uses).
+  const shadow = effectiveTextShadow(el, template);
+  // Centre the text block vertically on `pos`. Reduces to fontPx * 0.6 for
+  // a single line, which matches the previous single-line behaviour and
+  // keeps existing data pixel-stable. Kept in sync with `EditorCanvas.tsx`.
+  const lineCount = Math.max(1, el.text.split("\n").length);
+  const lineHeight = 1.2;
+  const offsetYPx = (lineCount * fontPx * lineHeight) / 2;
   layer.add(
     new Konva.Text({
       x: xPanel,
       y: yPanel,
       width: blockW,
       offsetX: blockW / 2,
-      offsetY: fontPx * 0.6,
+      offsetY: offsetYPx,
       rotation: el.rotation,
       align: el.align,
       text: el.text,
       fontSize: fontPx,
+      lineHeight,
       fontFamily: el.fontFamily ?? template.fontFamily,
       fontStyle: `${el.italic ? "italic " : ""}${el.weight}`,
       fill: el.color,

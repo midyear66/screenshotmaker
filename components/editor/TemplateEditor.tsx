@@ -120,31 +120,42 @@ export function TemplateEditor({
     setSelectedElementId(el.id);
   }
 
-  function addTextElement() {
+  /**
+   * All three "+ Foo" buttons take an explicit `panelIdx` now (chosen via a
+   * dropdown). Each new element is centred horizontally within that tile —
+   * `pos.x = panelIdx + tile-local 0..1` — and devices carry the panel
+   * assignment in their authoritative `panelIndex` field.
+   */
+  function addTextElement(panelIdx: number) {
     const el = defaultHeadlineElement("Text");
-    el.pos = { x: 0.5, y: 0.12 };
+    el.pos = { x: panelIdx + 0.5, y: 0.12 };
     addElement(el);
   }
 
-  function addIconElement(iconKey: string) {
+  function addIconElement(iconKey: string, panelIdx: number) {
     const el = defaultIconElement(iconKey);
+    el.pos = { x: panelIdx + 0.5, y: 0.4 };
     addElement(el);
   }
 
-  function addDeviceElement() {
-    const usedPanels = new Set<number>();
-    for (const el of templateConfig.elements) {
-      if (el.type === "device") usedPanels.add(Math.floor(el.pos.x));
-    }
-    let panelIdx = 0;
-    for (let i = 0; i < templateConfig.panelCount; i++) {
-      if (!usedPanels.has(i)) {
-        panelIdx = i;
-        break;
-      }
-    }
+  function addDeviceElement(panelIdx: number) {
     const el = defaultDeviceElement(panelIdx);
     addElement(el);
+  }
+
+  /**
+   * Suggest the first panel with no device on it; otherwise panel 0. Used
+   * to pre-select a sensible default in the new "Add to panel" dropdowns.
+   */
+  function suggestEmptyPanel(): number {
+    const used = new Set<number>();
+    for (const el of templateConfig.elements) {
+      if (el.type === "device") used.add(Math.floor(el.pos.x));
+    }
+    for (let i = 0; i < templateConfig.panelCount; i++) {
+      if (!used.has(i)) return i;
+    }
+    return 0;
   }
 
   function removeElement(id: string) {
@@ -331,24 +342,25 @@ export function TemplateEditor({
     <div className="flex flex-col gap-3 min-w-0">
       {/* ---- Top toolbar ---- */}
       <div className="flex items-center gap-2 flex-wrap">
-        <button
-          onClick={addTextElement}
-          className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-        >
-          + Text
-        </button>
+        <AddToPanelPopover
+          label="+ Text"
+          panelCount={templateConfig.panelCount}
+          onAdd={addTextElement}
+        />
         <IconAddPopover
+          panelCount={templateConfig.panelCount}
+          defaultPanelIdx={suggestEmptyPanel()}
           onPick={addIconElement}
           customIcons={templateConfig.customIcons}
           onUploadCustom={uploadCustomIcon}
           onDeleteCustom={removeCustomIcon}
         />
-        <button
-          onClick={addDeviceElement}
-          className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-        >
-          + Device
-        </button>
+        <AddToPanelPopover
+          label="+ Device"
+          panelCount={templateConfig.panelCount}
+          defaultPanelIdx={suggestEmptyPanel()}
+          onAdd={addDeviceElement}
+        />
 
         <span className="mx-1 h-5 w-px bg-zinc-300 dark:bg-zinc-700" />
 
@@ -389,6 +401,14 @@ export function TemplateEditor({
               updateConfig((c) => ({ ...c, bezelCornerRadius: v }))
             }
             palette={palette}
+            defaultFontFamily={templateConfig.fontFamily}
+            onDefaultFontFamily={(v) =>
+              updateConfig((c) => ({ ...c, fontFamily: v }))
+            }
+            defaultTextShadow={templateConfig.defaultTextShadow}
+            onDefaultTextShadow={(v) =>
+              updateConfig((c) => ({ ...c, defaultTextShadow: v }))
+            }
           />
         </Popover>
 
@@ -452,6 +472,7 @@ export function TemplateEditor({
           {selectedElement.type === "text" && (
             <TextElementBar
               element={selectedElement}
+              projectDefaultShadow={templateConfig.defaultTextShadow}
               onPatch={(patch) => patchTextWithReflow(selectedElement.id, patch)}
               onDelete={() => removeElement(selectedElement.id)}
               onMove={(dir) => moveElement(selectedElement.id, dir)}
@@ -632,6 +653,10 @@ function ProjectPanel({
   bezelCornerRadius,
   onBezelCornerRadius,
   palette,
+  defaultFontFamily,
+  onDefaultFontFamily,
+  defaultTextShadow,
+  onDefaultTextShadow,
 }: {
   templateName: string;
   onTemplateName: (v: string) => void;
@@ -643,6 +668,10 @@ function ProjectPanel({
   bezelCornerRadius: number;
   onBezelCornerRadius: (v: number) => void;
   palette: string[];
+  defaultFontFamily: string;
+  onDefaultFontFamily: (v: string) => void;
+  defaultTextShadow: TextShadow | undefined;
+  onDefaultTextShadow: (v: TextShadow | undefined) => void;
 }) {
   return (
     <div className="space-y-3">
@@ -654,6 +683,31 @@ function ProjectPanel({
           onBlur={onTemplateNameCommit}
           className="input"
         />
+      </div>
+      <div>
+        <Label>Default font</Label>
+        <select
+          value={defaultFontFamily}
+          onChange={(e) => onDefaultFontFamily(e.target.value)}
+          className="input"
+          style={{ fontFamily: defaultFontFamily }}
+        >
+          {FONT_OPTIONS.filter((o) => o.value !== TEMPLATE_FONT_VALUE).map(
+            (opt) => (
+              <option
+                key={opt.value}
+                value={opt.value}
+                style={{ fontFamily: opt.value }}
+              >
+                {opt.label}
+              </option>
+            )
+          )}
+        </select>
+        <div className="text-[11px] text-zinc-500 mt-1 leading-snug">
+          Applied to every text element whose font is set to{" "}
+          <em>Default (template font)</em>.
+        </div>
       </div>
       <div>
         <Label>Default background color</Label>
@@ -681,6 +735,100 @@ function ProjectPanel({
           onChange={onBezelCornerRadius}
         />
       </div>
+      <ShadowEditor
+        title="Default text shadow"
+        shadow={defaultTextShadow}
+        onChange={onDefaultTextShadow}
+        helper="Applied to every text element that doesn't have its own shadow override."
+      />
+    </div>
+  );
+}
+
+/**
+ * Re-usable shadow controls used both for the project-default shadow (in
+ * the Project popover) and the per-element shadow override (inside the text
+ * contextual bar's Shadow popover).
+ */
+function ShadowEditor({
+  title,
+  shadow,
+  onChange,
+  helper,
+}: {
+  title: string;
+  shadow: TextShadow | undefined;
+  onChange: (v: TextShadow | undefined) => void;
+  helper?: string;
+}) {
+  const enabled = !!shadow;
+  return (
+    <div className="space-y-2">
+      <label className="flex items-center gap-2 text-xs font-medium">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) =>
+            onChange(e.target.checked ? { ...DEFAULT_TEXT_SHADOW } : undefined)
+          }
+        />
+        {title}
+      </label>
+      {helper && (
+        <div className="text-[11px] text-zinc-500 leading-snug">{helper}</div>
+      )}
+      {enabled && shadow && (
+        <div className="space-y-2 pl-5">
+          <div>
+            <Label>Color</Label>
+            <ColorRow
+              value={shadow.color}
+              onChange={(v) => onChange({ ...shadow, color: v })}
+              palette={["#000000", "#1f2937", "#ffffff", "#dc2626", "#1d4ed8"]}
+            />
+          </div>
+          <div>
+            <Label>Blur</Label>
+            <Slider
+              min={0}
+              max={60}
+              step={1}
+              value={Math.round(shadow.blur)}
+              onChange={(v) => onChange({ ...shadow, blur: v })}
+            />
+          </div>
+          <div>
+            <Label>Offset X</Label>
+            <Slider
+              min={-40}
+              max={40}
+              step={1}
+              value={Math.round(shadow.offsetX)}
+              onChange={(v) => onChange({ ...shadow, offsetX: v })}
+            />
+          </div>
+          <div>
+            <Label>Offset Y</Label>
+            <Slider
+              min={-40}
+              max={40}
+              step={1}
+              value={Math.round(shadow.offsetY)}
+              onChange={(v) => onChange({ ...shadow, offsetY: v })}
+            />
+          </div>
+          <div>
+            <Label>Opacity</Label>
+            <Slider
+              min={0}
+              max={1}
+              step={0.05}
+              value={shadow.opacity}
+              onChange={(v) => onChange({ ...shadow, opacity: v })}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -856,11 +1004,13 @@ function ScreenshotsPanel({
 
 function TextElementBar({
   element,
+  projectDefaultShadow,
   onPatch,
   onDelete,
   onMove,
 }: {
   element: TextElement;
+  projectDefaultShadow: TextShadow | undefined;
   onPatch: (patch: Partial<TextElement>) => void;
   onDelete: () => void;
   onMove: (direction: -1 | 1) => void;
@@ -868,14 +1018,18 @@ function TextElementBar({
   return (
     <>
       <Badge>Text</Badge>
-      <Popover label={<>Edit text <Caret /></>} panelClassName="w-72">
+      <Popover label={<>Edit text <Caret /></>} panelClassName="w-72 space-y-1">
         <textarea
           value={element.text}
           onChange={(e) => onPatch({ text: e.target.value })}
           className="input"
-          rows={3}
+          rows={4}
           autoFocus
         />
+        <div className="text-[11px] text-zinc-500 leading-snug">
+          Enter inserts a new line. Use Shift/⌘/Ctrl-Enter or click out to
+          finish.
+        </div>
       </Popover>
       <Field label="Font" width="w-36">
         <select
@@ -977,6 +1131,7 @@ function TextElementBar({
       </Field>
       <ShadowPopover
         shadow={element.shadow}
+        projectDefault={projectDefaultShadow}
         onChange={(shadow) => onPatch({ shadow })}
       />
       <OverflowMenu onDelete={onDelete} onMove={onMove} />
@@ -986,12 +1141,15 @@ function TextElementBar({
 
 function ShadowPopover({
   shadow,
+  projectDefault,
   onChange,
 }: {
   shadow: TextShadow | undefined;
+  projectDefault: TextShadow | undefined;
   onChange: (shadow: TextShadow | undefined) => void;
 }) {
-  const enabled = !!shadow;
+  const hasOverride = !!shadow;
+  const effective = shadow ?? projectDefault;
   return (
     <Popover
       label={
@@ -999,7 +1157,7 @@ function ShadowPopover({
           Shadow
           <span
             className={`w-1.5 h-1.5 rounded-full ${
-              enabled ? "bg-blue-500" : "bg-zinc-400/40"
+              effective ? "bg-blue-500" : "bg-zinc-400/40"
             }`}
           />
           <Caret />
@@ -1007,68 +1165,22 @@ function ShadowPopover({
       }
       panelClassName="w-64 space-y-3"
     >
-      <label className="flex items-center gap-2 text-xs">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) =>
-            onChange(e.target.checked ? { ...DEFAULT_TEXT_SHADOW } : undefined)
-          }
-        />
-        Enable drop shadow
-      </label>
-      {enabled && shadow && (
-        <div className="space-y-2">
-          <div>
-            <Label>Color</Label>
-            <ColorRow
-              value={shadow.color}
-              onChange={(v) => onChange({ ...shadow, color: v })}
-              palette={["#000000", "#1f2937", "#ffffff", "#dc2626", "#1d4ed8"]}
-            />
-          </div>
-          <div>
-            <Label>Blur</Label>
-            <Slider
-              min={0}
-              max={60}
-              step={1}
-              value={Math.round(shadow.blur)}
-              onChange={(v) => onChange({ ...shadow, blur: v })}
-            />
-          </div>
-          <div>
-            <Label>Offset X</Label>
-            <Slider
-              min={-40}
-              max={40}
-              step={1}
-              value={Math.round(shadow.offsetX)}
-              onChange={(v) => onChange({ ...shadow, offsetX: v })}
-            />
-          </div>
-          <div>
-            <Label>Offset Y</Label>
-            <Slider
-              min={-40}
-              max={40}
-              step={1}
-              value={Math.round(shadow.offsetY)}
-              onChange={(v) => onChange({ ...shadow, offsetY: v })}
-            />
-          </div>
-          <div>
-            <Label>Opacity</Label>
-            <Slider
-              min={0}
-              max={1}
-              step={0.05}
-              value={shadow.opacity}
-              onChange={(v) => onChange({ ...shadow, opacity: v })}
-            />
-          </div>
+      {projectDefault && !hasOverride && (
+        <div className="text-[11px] text-zinc-500 leading-snug">
+          Inheriting the <strong>project default shadow</strong>. Tick the
+          box below to override it just for this element.
         </div>
       )}
+      <ShadowEditor
+        title="Override drop shadow"
+        shadow={shadow}
+        onChange={onChange}
+        helper={
+          !projectDefault
+            ? "No project default set. Enabling here adds a shadow to this element only."
+            : undefined
+        }
+      />
     </Popover>
   );
 }
@@ -1589,20 +1701,36 @@ function CustomIconGrid({
 }
 
 function IconAddPopover({
+  panelCount,
+  defaultPanelIdx,
   onPick,
   customIcons,
   onUploadCustom,
   onDeleteCustom,
 }: {
-  onPick: (iconValue: string) => void;
+  panelCount: number;
+  defaultPanelIdx: number;
+  onPick: (iconValue: string, panelIdx: number) => void;
   customIcons: CustomIcon[];
   onUploadCustom: (file: File) => void | Promise<void>;
   onDeleteCustom: (iconId: string) => void | Promise<void>;
 }) {
+  // Per-open: which tile the next icon will land on. Resets to the suggested
+  // empty-tile default each time the popover is closed and reopened.
+  const [panelIdx, setPanelIdx] = useState(defaultPanelIdx);
+  useEffect(() => {
+    setPanelIdx(defaultPanelIdx);
+  }, [defaultPanelIdx]);
   return (
     <Popover label="+ Icon" panelClassName="w-64 space-y-2">
       {({ close }) => (
         <>
+          <PanelChooser
+            label="Add to panel"
+            panelCount={panelCount}
+            value={panelIdx}
+            onChange={setPanelIdx}
+          />
           <div className="text-[10px] uppercase tracking-wide text-zinc-500">
             Built-in
           </div>
@@ -1613,7 +1741,7 @@ function IconAddPopover({
                 <button
                   key={key}
                   onClick={() => {
-                    onPick(key);
+                    onPick(key, panelIdx);
                     close();
                   }}
                   title={key}
@@ -1639,7 +1767,7 @@ function IconAddPopover({
           <CustomIconGrid
             customIcons={customIcons}
             onPick={(value) => {
-              onPick(value);
+              onPick(value, panelIdx);
               close();
             }}
             onUpload={onUploadCustom}
@@ -1648,6 +1776,108 @@ function IconAddPopover({
         </>
       )}
     </Popover>
+  );
+}
+
+/**
+ * "+ Text" / "+ Device" trigger. Shows a row of panel buttons; clicking one
+ * adds the element to that panel and closes.
+ */
+function AddToPanelPopover({
+  label,
+  panelCount,
+  defaultPanelIdx,
+  onAdd,
+}: {
+  label: string;
+  panelCount: number;
+  defaultPanelIdx?: number;
+  onAdd: (panelIdx: number) => void;
+}) {
+  // If only one panel, no choice to make — drop straight onto it.
+  if (panelCount <= 1) {
+    return (
+      <button
+        onClick={() => onAdd(0)}
+        className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+      >
+        {label}
+      </button>
+    );
+  }
+  return (
+    <Popover label={label} panelClassName="w-56 space-y-2">
+      {({ close }) => (
+        <>
+          <div className="text-[10px] uppercase tracking-wide text-zinc-500">
+            Add to panel
+          </div>
+          <div className="grid grid-cols-5 gap-1">
+            {Array.from({ length: panelCount }, (_, i) => (
+              <button
+                key={i}
+                onClick={() => {
+                  onAdd(i);
+                  close();
+                }}
+                className={`text-xs px-2 py-1 rounded border ${
+                  defaultPanelIdx === i
+                    ? "border-blue-500 ring-2 ring-blue-500"
+                    : "border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                }`}
+                title={
+                  defaultPanelIdx === i
+                    ? `Panel ${i + 1} (suggested — no device yet)`
+                    : `Panel ${i + 1}`
+                }
+              >
+                {i + 1}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </Popover>
+  );
+}
+
+/**
+ * Used inside the icon-add popover so the same popover lets the user pick
+ * tile + icon in one go.
+ */
+function PanelChooser({
+  label,
+  panelCount,
+  value,
+  onChange,
+}: {
+  label: string;
+  panelCount: number;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  if (panelCount <= 1) return null;
+  return (
+    <div className="space-y-1">
+      <div className="text-[10px] uppercase tracking-wide text-zinc-500">
+        {label}
+      </div>
+      <div className="grid grid-cols-5 gap-1">
+        {Array.from({ length: panelCount }, (_, i) => (
+          <button
+            key={i}
+            onClick={() => onChange(i)}
+            className={`text-xs px-2 py-1 rounded border ${
+              value === i
+                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 border-zinc-900 dark:border-zinc-100"
+                : "border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            }`}
+          >
+            {i + 1}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
