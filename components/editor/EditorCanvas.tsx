@@ -523,6 +523,12 @@ export function EditorCanvas({
                       fontFamily={fontFamilyOf(el, template)}
                       fontStyle={`${el.italic ? "italic " : ""}${el.weight}`}
                       fill={el.color}
+                      shadowEnabled={!!el.shadow}
+                      shadowColor={el.shadow?.color}
+                      shadowBlur={el.shadow?.blur}
+                      shadowOffsetX={el.shadow?.offsetX}
+                      shadowOffsetY={el.shadow?.offsetY}
+                      shadowOpacity={el.shadow?.opacity}
                       draggable={!readOnly}
                       onMouseDown={(e) => {
                         if (readOnly || !onSelectElement) return;

@@ -16,7 +16,7 @@ One project = one app's screenshot set: visual design + screenshots + export, al
    - **Devices are tile-assigned.** Each device has an explicit `panelIndex`. Drag a device across the gutter and it reassigns to the new tile on drop; the inspector also has a **Tile** dropdown for explicit reassignment. Visually they hard-crop at the tile edge, so the App-Store "phone bridging two screens" look is achieved by dropping **one device per adjacent tile** and aligning them at the gap.
    - **Filmstrip layout.** Panels render at a fixed two-panel-wide baseline so they stay readable no matter how many you add — the editor wrapper scrolls horizontally once total canvas width exceeds the viewport.
    - **Screenshots are a pool, not slot-bound.** Upload screenshots to the project pool; attach any of them to any device via the device inspector. Multiple devices can share one screenshot.
-   - **Text:** per-element font picker (~20 system families), bold + italic toggles, weight 400–800, color, alignment, rotation; box width auto-fits the typed content. Double-click to edit in place.
+   - **Text:** per-element font picker (~35 system families across sans-serif, serif, mono, display), bold + italic toggles, weight 400–800, color, alignment, rotation, optional drop shadow (color / blur / offset / opacity); box width auto-fits the typed content. Double-click to edit in place.
    - **Icons:** 12 built-in monoline icons + upload your own SVG files (per project) — colour, size, rotation, all work uniformly.
    - **Background image** is cover-fit across the full canvas once and sliced contiguously — adjacent tiles' background pixels match exactly at the gap (no source pixels disappear behind the gutter). Template-wide zoom / blur / brightness.
    - Bezel colour picker (black / graphite / grey / silver / custom) — side ribbon shade auto-derived.
@@ -303,7 +303,7 @@ Sanity checks after move:
    - Each element is independently draggable, rotatable (top handle), and resizable (corner handles). Devices are clipped at their tile's edges; while you drag one the clip is dropped so you can see it pass over the gutter.
    - **Reassign a device's tile** by dragging it across the gutter into another tile, or via the **Tile** dropdown in the device inspector. `pos.x` is shifted automatically so the device keeps the same relative position inside its new tile.
    - **Double-click text** to edit in place — the overlay textarea matches the rendered font/size/rotation.
-   - Per-text-element: font picker (~20 system families), Bold / Italic toggles, weight 400–800, colour, align, rotation slider. Width auto-fits to typed content.
+   - Per-text-element: font picker (~35 system families), Bold / Italic toggles, weight 400–800, colour, align, rotation slider, optional drop shadow (color / blur / offset / opacity). Width auto-fits to typed content.
    - Per-icon-element: pick from 12 built-ins, or **upload your own SVG** files (per project); set size, colour (built-ins), rotation.
    - Tune device tilt (X axis = top/bottom edge, Y axis = side edge), Z-axis rotation (-90° to +90°), scale.
    - Pick a **bezel colour** preset / custom hue and a **bezel corner radius** (0 = sharp, 200 = pill).
@@ -321,7 +321,7 @@ The App-Store split-phone effect (one phone visually spans two tiles with the ga
 
 - **iPad layout is naive.** Normalized coords are referenced to the iPhone 6.7 aspect (≈0.46). The iPad 13" canvas (≈0.75) renders the same layout, leaving large empty bands. Tweak positions with iPad in mind, or skip iPad for now.
 - **Stylized device frame**, not real Apple bezel PNGs. The pseudo-3D prism + rounded-corner ribbon reads as a phone but isn't pixel-accurate to any specific model. Notch is always black regardless of bezel colour (matches real iPhones).
-- **Fonts are OS-resolved system fonts.** The font picker lists ~20 cross-platform families; rendering depends on what the browser/container has installed. Custom font upload + web fonts (Google Fonts) aren't wired up yet.
+- **Fonts are OS-resolved system fonts.** The font picker lists ~35 cross-platform families with sensible fallback chains; rendering depends on what the browser/container has installed (e.g. Segoe UI on Windows, Avenir/Optima on macOS, Roboto on Android/Chrome OS). Custom font upload + web fonts (Google Fonts) aren't wired up yet.
 - **Custom SVG icons keep their own colours.** Multi-colour SVGs don't recolour from the inspector; the colour picker is a no-op for uploaded icons (built-in icons recolour as before).
 - **No undo/redo** in the editor — changes are autosaved live.
 - **No security model — do not put this on the public internet.** The app has no authentication, no authorisation, no rate limiting, no CSRF protection, and minimal upload validation (image/SVG MIME sniff only). Anyone who can reach the HTTP port can read, edit, and delete every project, and upload arbitrary files. Intended deployment is `localhost`, a trusted LAN, or behind a private overlay network (Tailscale, ZeroTier, WireGuard). If you absolutely need it reachable from outside that network, sit a reverse proxy with real authentication (Authelia, Pocket-ID, Cloudflare Access, basic auth at the proxy) in front of it — never expose the container's port directly.

@@ -130,6 +130,33 @@ export type TextElement = {
   color: string;
   /** Degrees, rotated around the text block's centre. */
   rotation: number;
+  /**
+   * Optional drop shadow. All distances are in panel-space (1290-wide
+   * canvas) so they scale uniformly at export time alongside `fontSize`.
+   * `undefined` means no shadow.
+   */
+  shadow?: TextShadow;
+};
+
+export type TextShadow = {
+  color: string;
+  /** Px in panel-space. */
+  blur: number;
+  /** Px in panel-space, positive = right. */
+  offsetX: number;
+  /** Px in panel-space, positive = down. */
+  offsetY: number;
+  /** 0..1. */
+  opacity: number;
+};
+
+/** Default shadow values used when the user first enables shadow. */
+export const DEFAULT_TEXT_SHADOW: TextShadow = {
+  color: "#000000",
+  blur: 8,
+  offsetX: 4,
+  offsetY: 4,
+  opacity: 0.6,
 };
 
 export type IconElement = {

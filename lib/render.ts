@@ -211,6 +211,7 @@ function renderText(
 ) {
   const blockW = el.width * PANEL_W * xScale;
   const fontPx = el.fontSize * xScale;
+  const shadow = el.shadow;
   layer.add(
     new Konva.Text({
       x: xPanel,
@@ -225,6 +226,14 @@ function renderText(
       fontFamily: el.fontFamily ?? template.fontFamily,
       fontStyle: `${el.italic ? "italic " : ""}${el.weight}`,
       fill: el.color,
+      // Shadow distances are stored in panel-space (same as fontSize) so
+      // they get the same xScale multiplier here.
+      shadowEnabled: !!shadow,
+      shadowColor: shadow?.color,
+      shadowBlur: shadow ? shadow.blur * xScale : undefined,
+      shadowOffsetX: shadow ? shadow.offsetX * xScale : undefined,
+      shadowOffsetY: shadow ? shadow.offsetY * xScale : undefined,
+      shadowOpacity: shadow?.opacity,
     })
   );
 }

@@ -8,6 +8,7 @@ import {
   CanvasElement,
   CUSTOM_ICON_PREFIX,
   CustomIcon,
+  DEFAULT_TEXT_SHADOW,
   DeviceElement,
   defaultDeviceElement,
   defaultHeadlineElement,
@@ -18,6 +19,7 @@ import {
   parseTemplateConfig,
   TemplateConfig,
   TextElement,
+  TextShadow,
 } from "@/lib/editor-types";
 import { ICON_KEYS, ICONS } from "@/lib/icons";
 import { FONT_OPTIONS, TEMPLATE_FONT_VALUE } from "@/lib/fonts";
@@ -973,8 +975,101 @@ function TextElementBar({
           onChange={(v) => onPatch({ rotation: v })}
         />
       </Field>
+      <ShadowPopover
+        shadow={element.shadow}
+        onChange={(shadow) => onPatch({ shadow })}
+      />
       <OverflowMenu onDelete={onDelete} onMove={onMove} />
     </>
+  );
+}
+
+function ShadowPopover({
+  shadow,
+  onChange,
+}: {
+  shadow: TextShadow | undefined;
+  onChange: (shadow: TextShadow | undefined) => void;
+}) {
+  const enabled = !!shadow;
+  return (
+    <Popover
+      label={
+        <span className="inline-flex items-center gap-1">
+          Shadow
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${
+              enabled ? "bg-blue-500" : "bg-zinc-400/40"
+            }`}
+          />
+          <Caret />
+        </span>
+      }
+      panelClassName="w-64 space-y-3"
+    >
+      <label className="flex items-center gap-2 text-xs">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) =>
+            onChange(e.target.checked ? { ...DEFAULT_TEXT_SHADOW } : undefined)
+          }
+        />
+        Enable drop shadow
+      </label>
+      {enabled && shadow && (
+        <div className="space-y-2">
+          <div>
+            <Label>Color</Label>
+            <ColorRow
+              value={shadow.color}
+              onChange={(v) => onChange({ ...shadow, color: v })}
+              palette={["#000000", "#1f2937", "#ffffff", "#dc2626", "#1d4ed8"]}
+            />
+          </div>
+          <div>
+            <Label>Blur</Label>
+            <Slider
+              min={0}
+              max={60}
+              step={1}
+              value={Math.round(shadow.blur)}
+              onChange={(v) => onChange({ ...shadow, blur: v })}
+            />
+          </div>
+          <div>
+            <Label>Offset X</Label>
+            <Slider
+              min={-40}
+              max={40}
+              step={1}
+              value={Math.round(shadow.offsetX)}
+              onChange={(v) => onChange({ ...shadow, offsetX: v })}
+            />
+          </div>
+          <div>
+            <Label>Offset Y</Label>
+            <Slider
+              min={-40}
+              max={40}
+              step={1}
+              value={Math.round(shadow.offsetY)}
+              onChange={(v) => onChange({ ...shadow, offsetY: v })}
+            />
+          </div>
+          <div>
+            <Label>Opacity</Label>
+            <Slider
+              min={0}
+              max={1}
+              step={0.05}
+              value={shadow.opacity}
+              onChange={(v) => onChange({ ...shadow, opacity: v })}
+            />
+          </div>
+        </div>
+      )}
+    </Popover>
   );
 }
 
