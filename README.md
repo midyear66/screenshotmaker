@@ -4,6 +4,8 @@ Self-hosted web app for generating App Store Connect–ready screenshots.
 
 One project = one app's screenshot set: visual design + screenshots + export, all on a single page. Drop new screenshots in for each release → download a ZIP organized by device size, ready to upload to App Store Connect.
 
+> ⚠️ **This is a self-hosted, single-user tool with no security model.** There is no authentication, no authorisation, no rate limiting, no CSRF protection, and no input quarantine on uploads. Anyone who can reach the port can read, edit, and delete every project on the instance, and upload arbitrary files into the host's `data/uploads/` tree. **Do not expose it to the public internet.** Run it on `localhost`, on a trusted LAN, or behind a private overlay network like **Tailscale** / **ZeroTier** / WireGuard. If you need it reachable from outside that network, put it behind your own reverse proxy with authentication (Authelia, Pocket-ID, Cloudflare Access, basic auth at the proxy, etc.) — not on the open internet directly.
+
 ---
 
 ## What it does
@@ -322,7 +324,7 @@ The App-Store split-phone effect (one phone visually spans two tiles with the ga
 - **Fonts are OS-resolved system fonts.** The font picker lists ~20 cross-platform families; rendering depends on what the browser/container has installed. Custom font upload + web fonts (Google Fonts) aren't wired up yet.
 - **Custom SVG icons keep their own colours.** Multi-colour SVGs don't recolour from the inspector; the colour picker is a no-op for uploaded icons (built-in icons recolour as before).
 - **No undo/redo** in the editor — changes are autosaved live.
-- **No auth.** Anyone with network access to the port can use the app. Intended for LAN / Tailscale. Add basic auth middleware if exposing publicly.
+- **No security model — do not put this on the public internet.** The app has no authentication, no authorisation, no rate limiting, no CSRF protection, and minimal upload validation (image/SVG MIME sniff only). Anyone who can reach the HTTP port can read, edit, and delete every project, and upload arbitrary files. Intended deployment is `localhost`, a trusted LAN, or behind a private overlay network (Tailscale, ZeroTier, WireGuard). If you absolutely need it reachable from outside that network, sit a reverse proxy with real authentication (Authelia, Pocket-ID, Cloudflare Access, basic auth at the proxy) in front of it — never expose the container's port directly.
 - **Perspective tilt is rounded-rect prism, not true 3D.** Looks correct for typical hero-shot angles (≤30°); extreme angles will show projection artefacts.
 - **Phone-bridging is two-device manual alignment**, not single-element spanning — see the workflow note above.
 - **Legacy `Slot`, `Screen`, and `Slot.headline/subhead` rows + columns** still exist in the DB schema. They're read once by `lib/projectMigration.ts` (v0 → v1) and then ignored. Safe to drop in a future schema cleanup once no project on the host predates v1.
