@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { NewProjectButton } from "@/components/NewProjectButton";
 import { DeleteButton } from "@/components/DeleteButton";
+import { parseTemplateConfig } from "@/lib/editor-types";
 
 export const dynamic = "force-dynamic";
 
@@ -29,12 +30,23 @@ async function ensureProjectsForOrphanTemplates() {
 export default async function Home() {
   await ensureProjectsForOrphanTemplates();
 
-  const projects = await prisma.project.findMany({
+  const projectsRaw = await prisma.project.findMany({
     orderBy: { updatedAt: "desc" },
     include: {
-      template: { select: { id: true, name: true, slotCount: true } },
-      _count: { select: { screens: true } },
+      template: { select: { id: true, name: true, config: true } },
     },
+  });
+  // Pull panel count + screenshot pool size out of the canvas-model JSON
+  // blob; the legacy `slotCount` column and `Screen` table aren't written by
+  // the editor any more.
+  const projects = projectsRaw.map((p) => {
+    const cfg = parseTemplateConfig(p.template.config);
+    return {
+      id: p.id,
+      template: { id: p.template.id, name: p.template.name },
+      panelCount: cfg.panelCount,
+      screenshotCount: cfg.screenshots.length,
+    };
   });
 
   return (
@@ -72,7 +84,9 @@ export default async function Home() {
                   <DeleteButton kind="project" id={p.id} name={p.template.name} />
                 </div>
                 <div className="text-xs text-zinc-500">
-                  {p._count.screens} / {p.template.slotCount} screens
+                  {p.panelCount} panel{p.panelCount === 1 ? "" : "s"} ·{" "}
+                  {p.screenshotCount} screenshot
+                  {p.screenshotCount === 1 ? "" : "s"}
                 </div>
               </li>
             ))}

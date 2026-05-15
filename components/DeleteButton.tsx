@@ -20,7 +20,11 @@ export function DeleteButton({
     setBusy(true);
     const res = await fetch(`/api/${kind}s/${id}`, { method: "DELETE" });
     setBusy(false);
-    if (res.ok) router.refresh();
+    if (res.ok) {
+      router.refresh();
+    } else {
+      alert(`Delete failed (${res.status})`);
+    }
   }
 
   return (

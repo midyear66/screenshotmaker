@@ -170,10 +170,10 @@ export function EditorCanvas({
 
   // Filmstrip layout: derive scale from a fixed baseline ("how much canvas
   // fits in the viewport") so panels stay the same readable size as the user
-  // adds more. Baseline = first 2 panels (or 1 panel if that's all there is).
+  // adds more. Baseline = first 4 panels (or 1 panel if that's all there is).
   // Anything beyond that overflows the wrapper and scrolls horizontally.
   const baselineCanvasW =
-    panelCount === 1 ? PANEL_W : 2 * PANEL_W + PANEL_GAP_PX;
+    panelCount === 1 ? PANEL_W : 4 * PANEL_W + 3 * PANEL_GAP_PX;
   const scale = displayWidth / baselineCanvasW;
   const stageDisplayW = canvasW * scale;
   const stageDisplayH = canvasH * scale;

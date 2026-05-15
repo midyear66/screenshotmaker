@@ -65,8 +65,9 @@ screenshotmaker/
 ├── components/
 │   ├── NewProjectButton / DeleteButton
 │   ├── editor/
-│   │   ├── TemplateEditor.tsx                # right-side inspector + project header + drop zone
+│   │   ├── TemplateEditor.tsx                # top toolbar (popover dropdowns) + contextual element bar + canvas host
 │   │   ├── EditorCanvas.tsx                  # react-konva Stage; per-tile clip groups; gap-aware bg
+│   │   ├── Popover.tsx                       # reusable trigger + panel, click-outside / Escape to close
 │   │   ├── DeviceFrame.tsx                   # warped Konva.Image of the flat+tilted device canvas
 │   │   └── useImage.ts
 │   └── project/
@@ -293,9 +294,10 @@ Sanity checks after move:
 ## End-to-end workflow
 
 1. **Create a project:** name + tile count → opens the unified editor.
-2. **Upload screenshots** to the project's pool from the inspector. They appear as thumbnails; assign one to a device by selecting the device and clicking a thumbnail.
-3. **Design on the single wide canvas:**
-   - Add elements with `+ Add text` / `+ Add icon` / `+ Add device`. New devices land on the first empty tile by default.
+2. **Editor surface:** a top toolbar of popover dropdowns sits above the canvas: `+ Text` / `+ Icon` / `+ Device` add buttons, then **Layers** (z-order list with reorder / delete / select), **Project** (name + default bg colour + bezel colour + bezel corner radius), **Background** (bg image upload + zoom / blur / brightness sliders), **Screenshots** (pool with upload + thumbnails). Selecting an element on the canvas reveals a thin **contextual bar** below the toolbar with that element's controls inline (sliders, toggles, nested popover pickers, `⋮` overflow menu for forward / back / delete).
+3. **Upload screenshots** from the toolbar's Screenshots popover; thumbnails go into the project-wide pool. Attach one to a device by selecting the device and clicking a thumbnail in the contextual bar's Screenshot picker.
+4. **Design on the single wide canvas:**
+   - Add elements with `+ Text` / `+ Icon` / `+ Device`. New devices land on the first empty tile by default.
    - Each element is independently draggable, rotatable (top handle), and resizable (corner handles). Devices are clipped at their tile's edges; while you drag one the clip is dropped so you can see it pass over the gutter.
    - **Reassign a device's tile** by dragging it across the gutter into another tile, or via the **Tile** dropdown in the device inspector. `pos.x` is shifted automatically so the device keeps the same relative position inside its new tile.
    - **Double-click text** to edit in place — the overlay textarea matches the rendered font/size/rotation.
@@ -305,7 +307,7 @@ Sanity checks after move:
    - Pick a **bezel colour** preset / custom hue and a **bezel corner radius** (0 = sharp, 200 = pill).
    - Upload a **background image**; template-wide zoom / blur / brightness sliders apply to the panorama uniformly.
    - Changes autosave every 600ms.
-4. **Export ZIP** — renders every `(tile × device-size)` combination, packs into ZIP, downloads.
+5. **Export ZIP** — renders every `(tile × device-size)` combination, packs into ZIP, downloads.
 
 ### Phone-bridging trick
 
@@ -343,7 +345,8 @@ Built incrementally:
 9. **Custom SVG icons + bezel corner radius** — upload your own SVG files per template (stored under `data/uploads/templates/<id>/icons/`), pick them from the same icon picker grid; new `TemplateConfig.bezelCornerRadius` slider (0–200 px) lets the device frame range from sharp rectangle to pill shape.
 10. **UI collapse: one project, one editor** — Template and Project were redundant in practice (you almost always make one project per template). The home page now lists Projects only; the project page hosts the full visual editor + drop zone + per-slot screenshot management + export on a single screen. DB schema is unchanged (Template still exists as a 1:1 sidecar); orphan templates from before the collapse get auto-promoted to projects on home load. Legacy `/templates/<id>` URLs redirect to their matching project.
 11. **Continuous-canvas model + tile-locked devices** — replaced the per-slot data model with a single wide canvas split into N "tiles" by a visible white gutter (matching App Store Connect's preview). All elements — text, icons, **and** devices — live on one `elements[]` array with panel-space coordinates. Screenshots become a project-wide pool referenced by `DeviceElement.screenshotId`. Per-tile `Konva.Group` clip rects hard-crop content at the gutter; the bg image is cover-fit once across the full canvas and sliced contiguously (no source pixels disappear behind the gap). A server-side migration (`lib/projectMigration.ts`) reshapes legacy per-slot data on first load and stamps `migrationVersion`. Devices carry an explicit `panelIndex` so the inspector's Tile dropdown can reassign them precisely.
-12. **Drag-across-gutter tile reassignment + filmstrip layout** — dragging a device across the gutter now reassigns it to the destination tile on drop (and a transform that crosses the gutter reassigns the same way), making tile changes a direct-manipulation gesture rather than only an inspector action. To keep panels readable as the project grows, the editor now sizes panels to a fixed two-panel-wide baseline instead of shrink-to-fit; the canvas wrapper scrolls horizontally as a filmstrip when more panels exist than fit the viewport.
+12. **Drag-across-gutter tile reassignment + filmstrip layout** — dragging a device across the gutter now reassigns it to the destination tile on drop (and a transform that crosses the gutter reassigns the same way), making tile changes a direct-manipulation gesture rather than only an inspector action. To keep panels readable as the project grows, the editor now sizes panels to a fixed multi-panel-wide baseline instead of shrink-to-fit; the canvas wrapper scrolls horizontally as a filmstrip when more panels exist than fit the viewport.
+13. **Toolbar popovers + contextual element bar** — retired the 22 rem right inspector column. Project / Background / Screenshots / Layers controls now live in dropdown popovers on a single top toolbar; selecting an element on the canvas reveals a thin horizontal contextual bar with that element's controls (sliders, toggles, nested pickers, an `⋮` overflow for reorder + delete). A small reusable `components/editor/Popover.tsx` (click-outside / Escape to close) is the only shared primitive. The canvas takes the full content width with the right column gone, and panels render at roughly half the previous baseline size for a denser filmstrip view. Also fixed two backlog bugs surfaced during the refactor: the home-page project card was reading the legacy `Screen` table / `slotCount` column instead of the canvas-model JSON (so the "screens" counter always read `0 / 5`), and project deletion silently failed because `Project.template` lacks `onDelete: Cascade` — the route now deletes the Project first, then the Template if no other Project still references it.
 
 ---
 

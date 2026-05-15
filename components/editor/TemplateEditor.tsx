@@ -23,6 +23,7 @@ import { ICON_KEYS, ICONS } from "@/lib/icons";
 import { FONT_OPTIONS, TEMPLATE_FONT_VALUE } from "@/lib/fonts";
 import { autoWidth } from "@/lib/textMeasure";
 import { ExportButton } from "@/components/project/ExportButton";
+import { Popover } from "./Popover";
 
 const EditorCanvas = dynamic(
   () => import("./EditorCanvas").then((m) => m.EditorCanvas),
@@ -83,12 +84,8 @@ export function TemplateEditor({
     flushSaves();
   }
 
-  // Persist any config change (set via setTemplateConfig).
   function updateConfig(updater: (c: TemplateConfig) => TemplateConfig) {
-    setTemplateConfig((c) => {
-      const next = updater(c);
-      return next;
-    });
+    setTemplateConfig((c) => updater(c));
     markDirty();
   }
 
@@ -122,7 +119,6 @@ export function TemplateEditor({
   }
 
   function addTextElement() {
-    // Drop in the middle of the canvas's first panel.
     const el = defaultHeadlineElement("Text");
     el.pos = { x: 0.5, y: 0.12 };
     addElement(el);
@@ -134,7 +130,6 @@ export function TemplateEditor({
   }
 
   function addDeviceElement() {
-    // Drop in the centre of the first empty panel if any, else panel 1.
     const usedPanels = new Set<number>();
     for (const el of templateConfig.elements) {
       if (el.type === "device") usedPanels.add(Math.floor(el.pos.x));
@@ -287,7 +282,6 @@ export function TemplateEditor({
     }));
   }
 
-  // Flush on unmount.
   useEffect(() => {
     const handler = () => flushSaves.flush();
     window.addEventListener("beforeunload", handler);
@@ -306,9 +300,6 @@ export function TemplateEditor({
     ? `/api/uploads/${templateConfig.bgImagePath}`
     : null;
 
-  // Informational only — panels in the free-form model don't *need* a device
-  // (the user might export panels with just bg + text + icons). Export is
-  // always enabled.
   const devicesWithScreenshots = useMemo(
     () =>
       templateConfig.elements.filter(
@@ -318,7 +309,6 @@ export function TemplateEditor({
   );
   const isReady = templateConfig.panelCount > 0;
 
-  // Build a minimal ProjectPayload for ExportButton.
   const exportPayload = useMemo(
     () => ({
       id: project.projectId,
@@ -326,332 +316,158 @@ export function TemplateEditor({
       template: {
         id: initial.id,
         name: templateName,
-        slotCount: templateConfig.panelCount, // legacy field; ExportButton's type only reads .slots
+        slotCount: templateConfig.panelCount,
         config: JSON.stringify(templateConfig),
-        slots: [], // panels live inside config.elements now
+        slots: [],
       },
-      screens: [], // legacy; renderPanelToBlob reads from templateConfig.screenshots
+      screens: [],
     }),
     [project.projectId, project.projectName, initial.id, templateName, templateConfig]
   );
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
-      {/* ---- Canvas + top toolbar ---- */}
-      {/* min-w-0: the canvas filmstrip can be much wider than the column;
-          without this the grid item grows to fit its content and the
-          horizontal scroll never engages. */}
-      <div className="flex flex-col items-stretch min-w-0">
-        <div className="mb-4 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={addTextElement}
-              className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            >
-              + Text
-            </button>
-            <IconPicker
-              onPick={addIconElement}
-              customIcons={templateConfig.customIcons}
-              onUploadCustom={uploadCustomIcon}
-              onDeleteCustom={removeCustomIcon}
-            />
-            <button
-              onClick={addDeviceElement}
-              className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            >
-              + Device
-            </button>
-            <span className="ml-2 text-xs text-zinc-500">
-              {templateConfig.panelCount} panel{templateConfig.panelCount === 1 ? "" : "s"}
-              {devicesWithScreenshots > 0 &&
-                ` · ${devicesWithScreenshots} device${devicesWithScreenshots === 1 ? "" : "s"} with screenshot`}
-            </span>
-          </div>
-          <ExportButton project={exportPayload} ready={isReady} />
-        </div>
-
-        <EditorCanvas
-          template={templateConfig}
-          screenshots={templateConfig.screenshots}
-          selectedElementId={selectedElementId}
-          onChange={(next) => {
-            setTemplateConfig(next);
-            markDirty();
-          }}
-          onSelectElement={setSelectedElementId}
-          maxWidthClass="max-w-full"
+    <div className="flex flex-col gap-3 min-w-0">
+      {/* ---- Top toolbar ---- */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={addTextElement}
+          className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+        >
+          + Text
+        </button>
+        <IconAddPopover
+          onPick={addIconElement}
+          customIcons={templateConfig.customIcons}
+          onUploadCustom={uploadCustomIcon}
+          onDeleteCustom={removeCustomIcon}
         />
+        <button
+          onClick={addDeviceElement}
+          className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+        >
+          + Device
+        </button>
 
-        {/* Panel count controls */}
-        <div className="mt-4 flex items-center gap-2">
-          <span className="text-sm text-zinc-500">Panels:</span>
-          <button
-            onClick={removePanel}
-            disabled={templateConfig.panelCount <= 1}
-            className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
-          >
-            −
-          </button>
-          <span className="text-sm tabular-nums w-6 text-center">
-            {templateConfig.panelCount}
-          </span>
-          <button
-            onClick={addPanel}
-            disabled={templateConfig.panelCount >= 10}
-            className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
-          >
-            +
-          </button>
-        </div>
-      </div>
+        <span className="mx-1 h-5 w-px bg-zinc-300 dark:bg-zinc-700" />
 
-      {/* ---- Inspector ---- */}
-      <aside className="space-y-6">
-        <Section title="Project">
-          <Label>Name</Label>
-          <input
-            value={templateName}
-            onChange={(e) => {
-              setTemplateName(e.target.value);
+        <Popover
+          label={<>Layers <Caret /></>}
+          panelClassName="w-72"
+        >
+          <LayersPanel
+            elements={templateConfig.elements}
+            selectedId={selectedElementId}
+            onSelect={setSelectedElementId}
+            onMove={moveElement}
+            onRemove={removeElement}
+          />
+        </Popover>
+
+        <Popover
+          label={<>Project <Caret /></>}
+          panelClassName="w-80"
+        >
+          <ProjectPanel
+            templateName={templateName}
+            onTemplateName={(v) => {
+              setTemplateName(v);
               markDirty();
             }}
-            onBlur={() => router.refresh()}
-            className="input"
-          />
-
-          <Label className="mt-3">Default background color</Label>
-          <ColorRow
-            value={templateConfig.backgroundColor}
-            onChange={(v) =>
+            onTemplateNameCommit={() => router.refresh()}
+            backgroundColor={templateConfig.backgroundColor}
+            onBackgroundColor={(v) =>
               updateConfig((c) => ({ ...c, backgroundColor: v }))
+            }
+            bezelColor={templateConfig.bezelColor}
+            onBezelColor={(v) =>
+              updateConfig((c) => ({ ...c, bezelColor: v }))
+            }
+            bezelCornerRadius={templateConfig.bezelCornerRadius}
+            onBezelCornerRadius={(v) =>
+              updateConfig((c) => ({ ...c, bezelCornerRadius: v }))
             }
             palette={palette}
           />
+        </Popover>
 
-          <Label className="mt-3">Bezel color</Label>
-          <ColorRow
-            value={templateConfig.bezelColor}
-            onChange={(v) => updateConfig((c) => ({ ...c, bezelColor: v }))}
-            palette={["#1f1f1f", "#3f3f46", "#6b6b6b", "#c4c4c4", "#e8e8e8", "#1e3a8a"]}
-          />
-
-          <Label className="mt-3">Bezel corner radius</Label>
-          <Slider
-            min={0}
-            max={200}
-            step={2}
-            value={Math.round(templateConfig.bezelCornerRadius)}
-            onChange={(v) =>
-              updateConfig((c) => ({ ...c, bezelCornerRadius: v }))
+        <Popover
+          label={<>Background <Caret /></>}
+          panelClassName="w-80"
+        >
+          <BackgroundPanel
+            hasBg={hasBg}
+            bgThumbUrl={bgThumbUrl}
+            uploadingBg={uploadingBg}
+            fileInputRef={bgFileInput}
+            onUploadBg={uploadBg}
+            onRemoveBg={removeBg}
+            panelCount={templateConfig.panelCount}
+            zoom={templateConfig.bgImagePanoZoom}
+            blur={templateConfig.bgImagePanoBlur}
+            brightness={templateConfig.bgImagePanoBrightness}
+            onZoom={(v) =>
+              updateConfig((c) => ({ ...c, bgImagePanoZoom: v }))
+            }
+            onBlur={(v) =>
+              updateConfig((c) => ({ ...c, bgImagePanoBlur: v }))
+            }
+            onBrightness={(v) =>
+              updateConfig((c) => ({ ...c, bgImagePanoBrightness: v }))
             }
           />
+        </Popover>
 
-          <Label className="mt-3">Background image</Label>
-          <div className="flex items-center gap-2">
-            {bgThumbUrl && (
-              <div
-                className="w-12 h-12 rounded border border-zinc-300 dark:border-zinc-700 bg-cover bg-center"
-                style={{ backgroundImage: `url("${bgThumbUrl}")` }}
-              />
-            )}
-            <input
-              ref={bgFileInput}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) uploadBg(file);
-                e.target.value = "";
-              }}
-            />
-            <button
-              onClick={() => bgFileInput.current?.click()}
-              disabled={uploadingBg}
-              className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
-            >
-              {uploadingBg ? "Uploading…" : hasBg ? "Replace" : "Upload"}
-            </button>
-            {hasBg && (
-              <button
-                onClick={removeBg}
-                className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              >
-                Remove
-              </button>
-            )}
-          </div>
-          <p className="text-[11px] text-zinc-500 mt-1 leading-snug">
-            Bg image spans all {templateConfig.panelCount} panel
-            {templateConfig.panelCount === 1 ? "" : "s"}; each export PNG gets
-            its slice.
-          </p>
-
-          {hasBg && (
-            <>
-              <Label className="mt-3">Bg zoom</Label>
-              <Slider
-                min={1}
-                max={3}
-                step={0.05}
-                value={templateConfig.bgImagePanoZoom}
-                onChange={(v) =>
-                  updateConfig((c) => ({ ...c, bgImagePanoZoom: v }))
-                }
-              />
-
-              <Label className="mt-2">Bg blur</Label>
-              <Slider
-                min={0}
-                max={60}
-                step={1}
-                value={Math.round(templateConfig.bgImagePanoBlur)}
-                onChange={(v) =>
-                  updateConfig((c) => ({ ...c, bgImagePanoBlur: v }))
-                }
-              />
-
-              <Label className="mt-2">Bg brightness</Label>
-              <Slider
-                min={0}
-                max={1.5}
-                step={0.05}
-                value={templateConfig.bgImagePanoBrightness}
-                onChange={(v) =>
-                  updateConfig((c) => ({ ...c, bgImagePanoBrightness: v }))
-                }
-              />
-            </>
-          )}
-        </Section>
-
-        <Section title="Screenshots pool">
-          <input
-            ref={screenshotFileInput}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) uploadScreenshot(file);
-              e.target.value = "";
-            }}
+        <Popover
+          label={<>Screenshots <Caret /></>}
+          panelClassName="w-80"
+        >
+          <ScreenshotsPanel
+            screenshots={templateConfig.screenshots}
+            uploading={uploadingScreenshot}
+            fileInputRef={screenshotFileInput}
+            onUpload={uploadScreenshot}
+            onDelete={deleteScreenshot}
           />
-          <button
-            onClick={() => screenshotFileInput.current?.click()}
-            disabled={uploadingScreenshot}
-            className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 mb-2"
-          >
-            {uploadingScreenshot ? "Uploading…" : "+ Upload screenshot"}
-          </button>
-          {templateConfig.screenshots.length === 0 ? (
-            <div className="text-xs text-zinc-500">
-              No screenshots yet. Upload one to attach to any device.
-            </div>
-          ) : (
-            <div className="grid grid-cols-4 gap-1">
-              {templateConfig.screenshots.map((s) => (
-                <div key={s.id} className="relative group">
-                  <div
-                    className="aspect-[1/2] rounded border border-zinc-300 dark:border-zinc-700 bg-cover bg-center bg-zinc-50 dark:bg-zinc-800"
-                    style={{ backgroundImage: `url("/api/uploads/${s.path}")` }}
-                    title={s.id}
-                  />
-                  <button
-                    onClick={() => deleteScreenshot(s.id)}
-                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-zinc-900 text-white text-[9px] leading-none opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="Delete"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
+        </Popover>
 
-        <Section title="Elements">
-          {templateConfig.elements.length === 0 ? (
-            <div className="text-xs text-zinc-500">
-              No elements yet. Use + Text / + Icon / + Device above.
-            </div>
-          ) : (
-            <ul className="space-y-1 mb-3">
-              {templateConfig.elements.map((el, i) => {
-                const isSel = el.id === selectedElementId;
-                const glyph =
-                  el.type === "text" ? "T" : el.type === "icon" ? "★" : "⌖";
-                const label =
-                  el.type === "text"
-                    ? el.text || "(empty)"
-                    : el.type === "icon"
-                    ? el.icon
-                    : "device";
-                return (
-                  <li
-                    key={el.id}
-                    className={`flex items-center gap-1 rounded px-2 py-1 text-xs border ${
-                      isSel
-                        ? "bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700"
-                        : "border-transparent hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                    }`}
-                  >
-                    <button
-                      onClick={() => setSelectedElementId(el.id)}
-                      className="flex-1 text-left truncate"
-                    >
-                      <span className="font-mono text-zinc-500 mr-1">{glyph}</span>
-                      {label}
-                    </button>
-                    <button
-                      onClick={() => moveElement(el.id, -1)}
-                      disabled={i === 0}
-                      className="px-1 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-30"
-                      title="Send back"
-                    >
-                      ↓
-                    </button>
-                    <button
-                      onClick={() => moveElement(el.id, 1)}
-                      disabled={i === templateConfig.elements.length - 1}
-                      className="px-1 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-30"
-                      title="Bring forward"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      onClick={() => removeElement(el.id)}
-                      className="px-1 text-zinc-400 hover:text-red-600"
-                      title="Delete"
-                    >
-                      ✕
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+        <span className="ml-2 text-xs text-zinc-500">
+          {templateConfig.panelCount} panel{templateConfig.panelCount === 1 ? "" : "s"}
+          {devicesWithScreenshots > 0 &&
+            ` · ${devicesWithScreenshots} device${devicesWithScreenshots === 1 ? "" : "s"} with screenshot`}
+        </span>
 
-          {selectedElement?.type === "text" && (
-            <TextElementInspector
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-xs text-zinc-500 tabular-nums">
+            {saving ? "Saving…" : "Saved"}
+          </span>
+          <ExportButton project={exportPayload} ready={isReady} />
+        </div>
+      </div>
+
+      {/* ---- Contextual element bar (only when something is selected) ---- */}
+      {selectedElement && (
+        <div className="flex items-center gap-3 flex-wrap rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900/60 px-3 py-2">
+          {selectedElement.type === "text" && (
+            <TextElementBar
               element={selectedElement}
-              palette={["#ffffff", "#000000", "#f3f4f6", "#1f2937", "#fef3c7"]}
               onPatch={(patch) => patchTextWithReflow(selectedElement.id, patch)}
+              onDelete={() => removeElement(selectedElement.id)}
+              onMove={(dir) => moveElement(selectedElement.id, dir)}
             />
           )}
-          {selectedElement?.type === "icon" && (
-            <IconElementInspector
+          {selectedElement.type === "icon" && (
+            <IconElementBar
               element={selectedElement}
-              palette={["#ffffff", "#000000", "#1d4ed8", "#f59e0b", "#ef4444"]}
               customIcons={templateConfig.customIcons}
               onUploadCustom={uploadCustomIcon}
               onDeleteCustom={removeCustomIcon}
               onPatch={(patch) => patchElement(selectedElement.id, patch)}
+              onDelete={() => removeElement(selectedElement.id)}
+              onMove={(dir) => moveElement(selectedElement.id, dir)}
             />
           )}
-          {selectedElement?.type === "device" && (
-            <DeviceElementInspector
+          {selectedElement.type === "device" && (
+            <DeviceElementBar
               element={selectedElement}
               screenshots={templateConfig.screenshots}
               panelCount={templateConfig.panelCount}
@@ -660,19 +476,47 @@ export function TemplateEditor({
                 const id = await uploadScreenshot(file);
                 if (id) patchElement(selectedElement.id, { screenshotId: id });
               }}
+              onDelete={() => removeElement(selectedElement.id)}
+              onMove={(dir) => moveElement(selectedElement.id, dir)}
             />
           )}
-          {!selectedElement && templateConfig.elements.length > 0 && (
-            <div className="text-[11px] text-zinc-500">
-              Click an element above (or on the canvas) to edit it.
-            </div>
-          )}
-        </Section>
-
-        <div className="text-xs text-zinc-500 text-right h-4">
-          {saving ? "Saving…" : "All changes saved"}
         </div>
-      </aside>
+      )}
+
+      {/* ---- Canvas ---- */}
+      <EditorCanvas
+        template={templateConfig}
+        screenshots={templateConfig.screenshots}
+        selectedElementId={selectedElementId}
+        onChange={(next) => {
+          setTemplateConfig(next);
+          markDirty();
+        }}
+        onSelectElement={setSelectedElementId}
+        maxWidthClass="max-w-full"
+      />
+
+      {/* ---- Panel count stepper ---- */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-zinc-500">Panels:</span>
+        <button
+          onClick={removePanel}
+          disabled={templateConfig.panelCount <= 1}
+          className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
+        >
+          −
+        </button>
+        <span className="text-sm tabular-nums w-6 text-center">
+          {templateConfig.panelCount}
+        </span>
+        <button
+          onClick={addPanel}
+          disabled={templateConfig.panelCount >= 10}
+          className="px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-700 disabled:opacity-30"
+        >
+          +
+        </button>
+      </div>
 
       <style jsx global>{`
         .input {
@@ -694,354 +538,882 @@ export function TemplateEditor({
 }
 
 // ============================================================================
-// Element inspectors
+// Toolbar popover panels
 // ============================================================================
 
-function TextElementInspector({
-  element,
-  palette,
-  onPatch,
+function LayersPanel({
+  elements,
+  selectedId,
+  onSelect,
+  onMove,
+  onRemove,
 }: {
-  element: TextElement;
+  elements: CanvasElement[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onMove: (id: string, direction: -1 | 1) => void;
+  onRemove: (id: string) => void;
+}) {
+  if (elements.length === 0) {
+    return (
+      <div className="text-xs text-zinc-500">
+        No elements yet. Use + Text / + Icon / + Device.
+      </div>
+    );
+  }
+  return (
+    <ul className="space-y-1 max-h-72 overflow-y-auto">
+      {elements.map((el, i) => {
+        const isSel = el.id === selectedId;
+        const glyph =
+          el.type === "text" ? "T" : el.type === "icon" ? "★" : "⌖";
+        const label =
+          el.type === "text"
+            ? el.text || "(empty)"
+            : el.type === "icon"
+            ? el.icon
+            : "device";
+        return (
+          <li
+            key={el.id}
+            className={`flex items-center gap-1 rounded px-2 py-1 text-xs border ${
+              isSel
+                ? "bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700"
+                : "border-transparent hover:bg-zinc-50 dark:hover:bg-zinc-800"
+            }`}
+          >
+            <button
+              onClick={() => onSelect(el.id)}
+              className="flex-1 text-left truncate"
+            >
+              <span className="font-mono text-zinc-500 mr-1">{glyph}</span>
+              {label}
+            </button>
+            <button
+              onClick={() => onMove(el.id, -1)}
+              disabled={i === 0}
+              className="px-1 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-30"
+              title="Send back"
+            >
+              ↓
+            </button>
+            <button
+              onClick={() => onMove(el.id, 1)}
+              disabled={i === elements.length - 1}
+              className="px-1 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-30"
+              title="Bring forward"
+            >
+              ↑
+            </button>
+            <button
+              onClick={() => onRemove(el.id)}
+              className="px-1 text-zinc-400 hover:text-red-600"
+              title="Delete"
+            >
+              ✕
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function ProjectPanel({
+  templateName,
+  onTemplateName,
+  onTemplateNameCommit,
+  backgroundColor,
+  onBackgroundColor,
+  bezelColor,
+  onBezelColor,
+  bezelCornerRadius,
+  onBezelCornerRadius,
+  palette,
+}: {
+  templateName: string;
+  onTemplateName: (v: string) => void;
+  onTemplateNameCommit: () => void;
+  backgroundColor: string;
+  onBackgroundColor: (v: string) => void;
+  bezelColor: string;
+  onBezelColor: (v: string) => void;
+  bezelCornerRadius: number;
+  onBezelCornerRadius: (v: number) => void;
   palette: string[];
-  onPatch: (patch: Partial<TextElement>) => void;
 }) {
   return (
-    <div className="space-y-2 border-t border-zinc-200 dark:border-zinc-800 pt-3">
-      <div className="text-[11px] text-zinc-500 leading-snug mb-1">
-        Drag the corners on the canvas to resize, the top handle to rotate, or
-        double-click text to edit in place.
+    <div className="space-y-3">
+      <div>
+        <Label>Name</Label>
+        <input
+          value={templateName}
+          onChange={(e) => onTemplateName(e.target.value)}
+          onBlur={onTemplateNameCommit}
+          className="input"
+        />
       </div>
-
-      <Label>Text</Label>
-      <textarea
-        value={element.text}
-        onChange={(e) => onPatch({ text: e.target.value })}
-        className="input"
-        rows={2}
-      />
-
-      <Label className="mt-2">Font</Label>
-      <select
-        value={element.fontFamily ?? TEMPLATE_FONT_VALUE}
-        onChange={(e) =>
-          onPatch({
-            fontFamily:
-              e.target.value === TEMPLATE_FONT_VALUE ? undefined : e.target.value,
-          })
-        }
-        className="input"
-        style={{ fontFamily: element.fontFamily ?? undefined }}
-      >
-        {FONT_OPTIONS.map((opt) => (
-          <option
-            key={opt.value}
-            value={opt.value}
-            style={{ fontFamily: opt.value === TEMPLATE_FONT_VALUE ? undefined : opt.value }}
-          >
-            {opt.label}
-          </option>
-        ))}
-      </select>
-
-      <Label className="mt-2">Font size</Label>
-      <Slider
-        min={20}
-        max={300}
-        value={Math.round(element.fontSize)}
-        onChange={(v) => onPatch({ fontSize: v })}
-      />
-
-      <Label className="mt-2">Weight</Label>
-      <div className="flex items-center gap-1">
-        {[400, 500, 600, 700, 800].map((w) => (
-          <button
-            key={w}
-            onClick={() => onPatch({ weight: w })}
-            className={`text-xs px-2 py-1 rounded border ${
-              element.weight === w
-                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 border-zinc-900 dark:border-zinc-100"
-                : "border-zinc-300 dark:border-zinc-700"
-            }`}
-          >
-            {w}
-          </button>
-        ))}
+      <div>
+        <Label>Default background color</Label>
+        <ColorRow
+          value={backgroundColor}
+          onChange={onBackgroundColor}
+          palette={palette}
+        />
       </div>
-
-      <div className="flex items-center gap-3 mt-2">
-        <label className="flex items-center gap-1.5 text-xs">
-          <input
-            type="checkbox"
-            checked={element.weight >= 700}
-            onChange={(e) => onPatch({ weight: e.target.checked ? 700 : 400 })}
-          />
-          <span className="font-bold">Bold</span>
-        </label>
-        <label className="flex items-center gap-1.5 text-xs">
-          <input
-            type="checkbox"
-            checked={element.italic}
-            onChange={(e) => onPatch({ italic: e.target.checked })}
-          />
-          <span className="italic">Italic</span>
-        </label>
+      <div>
+        <Label>Bezel color</Label>
+        <ColorRow
+          value={bezelColor}
+          onChange={onBezelColor}
+          palette={["#1f1f1f", "#3f3f46", "#6b6b6b", "#c4c4c4", "#e8e8e8", "#1e3a8a"]}
+        />
       </div>
-
-      <Label className="mt-2">Align</Label>
-      <div className="flex items-center gap-1">
-        {(["left", "center", "right"] as const).map((a) => (
-          <button
-            key={a}
-            onClick={() => onPatch({ align: a })}
-            className={`text-xs px-2 py-1 rounded border capitalize ${
-              element.align === a
-                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 border-zinc-900 dark:border-zinc-100"
-                : "border-zinc-300 dark:border-zinc-700"
-            }`}
-          >
-            {a}
-          </button>
-        ))}
+      <div>
+        <Label>Bezel corner radius</Label>
+        <Slider
+          min={0}
+          max={200}
+          step={2}
+          value={Math.round(bezelCornerRadius)}
+          onChange={onBezelCornerRadius}
+        />
       </div>
-
-      <Label className="mt-2">Rotation (°)</Label>
-      <Slider
-        min={-180}
-        max={180}
-        value={Math.round(element.rotation)}
-        onChange={(v) => onPatch({ rotation: v })}
-      />
-
-      <Label className="mt-2">Color</Label>
-      <ColorRow
-        value={element.color}
-        onChange={(v) => onPatch({ color: v })}
-        palette={palette}
-      />
     </div>
   );
 }
 
-function IconElementInspector({
-  element,
-  palette,
-  customIcons,
-  onUploadCustom,
-  onDeleteCustom,
-  onPatch,
+function BackgroundPanel({
+  hasBg,
+  bgThumbUrl,
+  uploadingBg,
+  fileInputRef,
+  onUploadBg,
+  onRemoveBg,
+  panelCount,
+  zoom,
+  blur,
+  brightness,
+  onZoom,
+  onBlur,
+  onBrightness,
 }: {
-  element: IconElement;
-  palette: string[];
-  customIcons: CustomIcon[];
-  onUploadCustom: (file: File) => void | Promise<void>;
-  onDeleteCustom: (iconId: string) => void | Promise<void>;
-  onPatch: (patch: Partial<IconElement>) => void;
+  hasBg: boolean;
+  bgThumbUrl: string | null;
+  uploadingBg: boolean;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
+  onUploadBg: (file: File) => void | Promise<void>;
+  onRemoveBg: () => void | Promise<void>;
+  panelCount: number;
+  zoom: number;
+  blur: number;
+  brightness: number;
+  onZoom: (v: number) => void;
+  onBlur: (v: number) => void;
+  onBrightness: (v: number) => void;
 }) {
-  const elementIsCustom = isCustomIcon(element.icon);
   return (
-    <div className="space-y-2 border-t border-zinc-200 dark:border-zinc-800 pt-3">
-      <Label>Icon</Label>
-      <div className="grid grid-cols-6 gap-1">
-        {ICON_KEYS.map((key) => {
-          const def = ICONS[key];
-          const isSel = key === element.icon;
-          return (
+    <div className="space-y-3">
+      <div>
+        <Label>Background image</Label>
+        <div className="flex items-center gap-2">
+          {bgThumbUrl && (
+            <div
+              className="w-12 h-12 rounded border border-zinc-300 dark:border-zinc-700 bg-cover bg-center"
+              style={{ backgroundImage: `url("${bgThumbUrl}")` }}
+            />
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onUploadBg(file);
+              e.target.value = "";
+            }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadingBg}
+            className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+          >
+            {uploadingBg ? "Uploading…" : hasBg ? "Replace" : "Upload"}
+          </button>
+          {hasBg && (
             <button
-              key={key}
-              onClick={() => onPatch({ icon: key })}
-              title={key}
-              className={`aspect-square rounded border flex items-center justify-center ${
-                isSel
-                  ? "border-blue-500 ring-2 ring-blue-500"
-                  : "border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              }`}
+              onClick={onRemoveBg}
+              className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
-              <svg viewBox={def.viewBox} className="w-5 h-5">
-                <path
-                  d={def.path}
-                  fill={def.stroke ? "none" : "currentColor"}
-                  stroke={def.stroke ? "currentColor" : undefined}
-                  strokeWidth={def.stroke ? 2 : 0}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              Remove
             </button>
-          );
-        })}
+          )}
+        </div>
+        <p className="text-[11px] text-zinc-500 mt-1 leading-snug">
+          Bg image spans all {panelCount} panel{panelCount === 1 ? "" : "s"};
+          each export PNG gets its slice.
+        </p>
       </div>
+      {hasBg && (
+        <>
+          <div>
+            <Label>Bg zoom</Label>
+            <Slider min={1} max={3} step={0.05} value={zoom} onChange={onZoom} />
+          </div>
+          <div>
+            <Label>Bg blur</Label>
+            <Slider
+              min={0}
+              max={60}
+              step={1}
+              value={Math.round(blur)}
+              onChange={onBlur}
+            />
+          </div>
+          <div>
+            <Label>Bg brightness</Label>
+            <Slider
+              min={0}
+              max={1.5}
+              step={0.05}
+              value={brightness}
+              onChange={onBrightness}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
-      <Label className="mt-2">Custom SVG</Label>
-      <CustomIconGrid
-        customIcons={customIcons}
-        selectedIconValue={element.icon}
-        onPick={(value) => onPatch({ icon: value })}
-        onUpload={onUploadCustom}
-        onDelete={onDeleteCustom}
+function ScreenshotsPanel({
+  screenshots,
+  uploading,
+  fileInputRef,
+  onUpload,
+  onDelete,
+}: {
+  screenshots: { id: string; path: string }[];
+  uploading: boolean;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
+  onUpload: (file: File) => void | Promise<unknown>;
+  onDelete: (id: string) => void | Promise<void>;
+}) {
+  return (
+    <div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onUpload(file);
+          e.target.value = "";
+        }}
       />
-
-      <Label className="mt-2">Size</Label>
-      <Slider
-        min={40}
-        max={600}
-        value={Math.round(element.size)}
-        onChange={(v) => onPatch({ size: v })}
-      />
-
-      <Label className="mt-2">Rotation (°)</Label>
-      <Slider
-        min={-180}
-        max={180}
-        value={Math.round(element.rotation)}
-        onChange={(v) => onPatch({ rotation: v })}
-      />
-
-      <Label className="mt-2">Color</Label>
-      <ColorRow
-        value={element.color}
-        onChange={(v) => onPatch({ color: v })}
-        palette={palette}
-      />
-      {elementIsCustom && (
-        <div className="text-[11px] text-zinc-500 leading-snug">
-          Color is ignored for uploaded SVGs — the file keeps its own colours.
+      <button
+        onClick={() => fileInputRef.current?.click()}
+        disabled={uploading}
+        className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 mb-2"
+      >
+        {uploading ? "Uploading…" : "+ Upload screenshot"}
+      </button>
+      {screenshots.length === 0 ? (
+        <div className="text-xs text-zinc-500">
+          No screenshots yet. Upload one to attach to any device.
+        </div>
+      ) : (
+        <div className="grid grid-cols-4 gap-1">
+          {screenshots.map((s) => (
+            <div key={s.id} className="relative group">
+              <div
+                className="aspect-[1/2] rounded border border-zinc-300 dark:border-zinc-700 bg-cover bg-center bg-zinc-50 dark:bg-zinc-800"
+                style={{ backgroundImage: `url("/api/uploads/${s.path}")` }}
+                title={s.id}
+              />
+              <button
+                onClick={() => onDelete(s.id)}
+                className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-zinc-900 text-white text-[9px] leading-none opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Delete"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-function DeviceElementInspector({
+// ============================================================================
+// Contextual element bars (selected element)
+// ============================================================================
+
+function TextElementBar({
+  element,
+  onPatch,
+  onDelete,
+  onMove,
+}: {
+  element: TextElement;
+  onPatch: (patch: Partial<TextElement>) => void;
+  onDelete: () => void;
+  onMove: (direction: -1 | 1) => void;
+}) {
+  return (
+    <>
+      <Badge>Text</Badge>
+      <Popover label={<>Edit text <Caret /></>} panelClassName="w-72">
+        <textarea
+          value={element.text}
+          onChange={(e) => onPatch({ text: e.target.value })}
+          className="input"
+          rows={3}
+          autoFocus
+        />
+      </Popover>
+      <Field label="Font" width="w-36">
+        <select
+          value={element.fontFamily ?? TEMPLATE_FONT_VALUE}
+          onChange={(e) =>
+            onPatch({
+              fontFamily:
+                e.target.value === TEMPLATE_FONT_VALUE ? undefined : e.target.value,
+            })
+          }
+          className="input"
+          style={{ fontFamily: element.fontFamily ?? undefined }}
+        >
+          {FONT_OPTIONS.map((opt) => (
+            <option
+              key={opt.value}
+              value={opt.value}
+              style={{ fontFamily: opt.value === TEMPLATE_FONT_VALUE ? undefined : opt.value }}
+            >
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Size">
+        <CompactSlider
+          min={20}
+          max={300}
+          value={Math.round(element.fontSize)}
+          onChange={(v) => onPatch({ fontSize: v })}
+        />
+      </Field>
+      <Field label="Weight" width="w-20">
+        <select
+          value={element.weight}
+          onChange={(e) => onPatch({ weight: Number(e.target.value) })}
+          className="input"
+        >
+          {[400, 500, 600, 700, 800].map((w) => (
+            <option key={w} value={w}>
+              {w}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <ToggleButton
+        active={element.weight >= 700}
+        onClick={() =>
+          onPatch({ weight: element.weight >= 700 ? 400 : 700 })
+        }
+        title="Bold"
+      >
+        <span className="font-bold">B</span>
+      </ToggleButton>
+      <ToggleButton
+        active={element.italic}
+        onClick={() => onPatch({ italic: !element.italic })}
+        title="Italic"
+      >
+        <span className="italic">I</span>
+      </ToggleButton>
+      <div className="flex items-center gap-0.5">
+        {(["left", "center", "right"] as const).map((a) => (
+          <ToggleButton
+            key={a}
+            active={element.align === a}
+            onClick={() => onPatch({ align: a })}
+            title={`Align ${a}`}
+          >
+            <AlignGlyph align={a} />
+          </ToggleButton>
+        ))}
+      </div>
+      <Popover
+        label={
+          <span className="inline-flex items-center gap-1">
+            Color
+            <span
+              className="w-3 h-3 rounded-sm border border-zinc-400"
+              style={{ background: element.color }}
+            />
+          </span>
+        }
+        panelClassName="w-56"
+      >
+        <ColorRow
+          value={element.color}
+          onChange={(v) => onPatch({ color: v })}
+          palette={["#ffffff", "#000000", "#f3f4f6", "#1f2937", "#fef3c7"]}
+        />
+      </Popover>
+      <Field label="Rotation">
+        <CompactSlider
+          min={-180}
+          max={180}
+          value={Math.round(element.rotation)}
+          onChange={(v) => onPatch({ rotation: v })}
+        />
+      </Field>
+      <OverflowMenu onDelete={onDelete} onMove={onMove} />
+    </>
+  );
+}
+
+function IconElementBar({
+  element,
+  customIcons,
+  onUploadCustom,
+  onDeleteCustom,
+  onPatch,
+  onDelete,
+  onMove,
+}: {
+  element: IconElement;
+  customIcons: CustomIcon[];
+  onUploadCustom: (file: File) => void | Promise<void>;
+  onDeleteCustom: (iconId: string) => void | Promise<void>;
+  onPatch: (patch: Partial<IconElement>) => void;
+  onDelete: () => void;
+  onMove: (direction: -1 | 1) => void;
+}) {
+  const elementIsCustom = isCustomIcon(element.icon);
+  return (
+    <>
+      <Badge>Icon</Badge>
+      <Popover label={<>Icon <Caret /></>} panelClassName="w-64 space-y-2">
+        {({ close }) => (
+          <>
+            <div className="text-[10px] uppercase tracking-wide text-zinc-500">
+              Built-in
+            </div>
+            <div className="grid grid-cols-6 gap-1">
+              {ICON_KEYS.map((key) => {
+                const def = ICONS[key];
+                const isSel = key === element.icon;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => {
+                      onPatch({ icon: key });
+                      close();
+                    }}
+                    title={key}
+                    className={`aspect-square rounded border flex items-center justify-center ${
+                      isSel
+                        ? "border-blue-500 ring-2 ring-blue-500"
+                        : "border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    }`}
+                  >
+                    <svg viewBox={def.viewBox} className="w-5 h-5">
+                      <path
+                        d={def.path}
+                        fill={def.stroke ? "none" : "currentColor"}
+                        stroke={def.stroke ? "currentColor" : undefined}
+                        strokeWidth={def.stroke ? 2 : 0}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="text-[10px] uppercase tracking-wide text-zinc-500 pt-1">
+              Custom SVG
+            </div>
+            <CustomIconGrid
+              customIcons={customIcons}
+              selectedIconValue={element.icon}
+              onPick={(value) => {
+                onPatch({ icon: value });
+                close();
+              }}
+              onUpload={onUploadCustom}
+              onDelete={onDeleteCustom}
+            />
+          </>
+        )}
+      </Popover>
+      <Field label="Size">
+        <CompactSlider
+          min={40}
+          max={600}
+          value={Math.round(element.size)}
+          onChange={(v) => onPatch({ size: v })}
+        />
+      </Field>
+      <Field label="Rotation">
+        <CompactSlider
+          min={-180}
+          max={180}
+          value={Math.round(element.rotation)}
+          onChange={(v) => onPatch({ rotation: v })}
+        />
+      </Field>
+      <Popover
+        label={
+          <span className="inline-flex items-center gap-1">
+            Color
+            <span
+              className="w-3 h-3 rounded-sm border border-zinc-400"
+              style={{ background: element.color }}
+            />
+          </span>
+        }
+        panelClassName="w-56"
+        disabled={elementIsCustom}
+        title={elementIsCustom ? "Custom SVGs keep their own colours" : undefined}
+      >
+        <ColorRow
+          value={element.color}
+          onChange={(v) => onPatch({ color: v })}
+          palette={["#ffffff", "#000000", "#1d4ed8", "#f59e0b", "#ef4444"]}
+        />
+      </Popover>
+      <OverflowMenu onDelete={onDelete} onMove={onMove} />
+    </>
+  );
+}
+
+function DeviceElementBar({
   element,
   screenshots,
   panelCount,
   onPatch,
   onUploadAndAttach,
+  onDelete,
+  onMove,
 }: {
   element: DeviceElement;
   screenshots: { id: string; path: string }[];
   panelCount: number;
   onPatch: (patch: Partial<DeviceElement>) => void;
   onUploadAndAttach: (file: File) => void | Promise<void>;
+  onDelete: () => void;
+  onMove: (direction: -1 | 1) => void;
 }) {
   const uploadRef = useRef<HTMLInputElement>(null);
   const currentPanel = Math.max(
     0,
     Math.min(panelCount - 1, element.panelIndex ?? Math.floor(element.pos.x))
   );
+  const currentScreenshot = element.screenshotId
+    ? screenshots.find((s) => s.id === element.screenshotId)
+    : null;
   return (
-    <div className="space-y-2 border-t border-zinc-200 dark:border-zinc-800 pt-3">
-      <div className="text-[11px] text-zinc-500 leading-snug mb-1">
-        Drag the corners on the canvas to resize, the top handle to rotate. To
-        place a phone across two tiles, add a second device and assign it to
-        the neighbouring tile below.
-      </div>
-
-      <Label>Tile</Label>
-      <select
-        className="input"
-        value={currentPanel}
-        onChange={(e) => {
-          const next = Number(e.target.value);
-          const delta = next - currentPanel;
-          // Shift pos.x by the tile delta so the device keeps the same
-          // relative position within its new tile (e.g. "centred" stays
-          // "centred"). panelIndex is the authoritative tile assignment.
-          onPatch({
-            panelIndex: next,
-            pos: { x: element.pos.x + delta, y: element.pos.y },
-          });
-        }}
-      >
-        {Array.from({ length: panelCount }, (_, i) => (
-          <option key={i} value={i}>
-            Tile {i + 1}
-          </option>
-        ))}
-      </select>
-
-      <Label className="mt-2">Screenshot</Label>
-      <div className="grid grid-cols-4 gap-1 mb-2">
-        {screenshots.map((s) => {
-          const isSel = s.id === element.screenshotId;
-          return (
-            <button
-              key={s.id}
-              onClick={() => onPatch({ screenshotId: s.id })}
-              className={`aspect-[1/2] rounded border bg-cover bg-center bg-zinc-50 dark:bg-zinc-800 ${
-                isSel
-                  ? "border-blue-500 ring-2 ring-blue-500"
-                  : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
-              }`}
-              style={{ backgroundImage: `url("/api/uploads/${s.path}")` }}
-              title={s.id}
-            />
-          );
-        })}
-        <input
-          ref={uploadRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) onUploadAndAttach(f);
-            e.target.value = "";
-          }}
+    <>
+      <Badge>Device</Badge>
+      <Field label="Size">
+        <CompactSlider
+          min={0.2}
+          max={1.5}
+          step={0.05}
+          value={element.size}
+          onChange={(v) => onPatch({ size: v })}
+          decimals={2}
         />
-        <button
-          onClick={() => uploadRef.current?.click()}
-          title="Upload + attach"
-          className="aspect-[1/2] rounded border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950 text-zinc-400 hover:text-blue-500 flex items-center justify-center text-lg"
+      </Field>
+      <Field label="Rotation">
+        <CompactSlider
+          min={-90}
+          max={90}
+          value={Math.round(element.rotation)}
+          onChange={(v) => onPatch({ rotation: v })}
+        />
+      </Field>
+      <Field label="Tilt X">
+        <CompactSlider
+          min={-30}
+          max={30}
+          value={Math.round(element.tiltX)}
+          onChange={(v) => onPatch({ tiltX: v })}
+        />
+      </Field>
+      <Field label="Tilt Y">
+        <CompactSlider
+          min={-30}
+          max={30}
+          value={Math.round(element.tiltY)}
+          onChange={(v) => onPatch({ tiltY: v })}
+        />
+      </Field>
+      <Field label="Tile" width="w-20">
+        <select
+          className="input"
+          value={currentPanel}
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            const delta = next - currentPanel;
+            onPatch({
+              panelIndex: next,
+              pos: { x: element.pos.x + delta, y: element.pos.y },
+            });
+          }}
         >
-          +
-        </button>
-      </div>
-      {element.screenshotId && (
-        <button
-          onClick={() => onPatch({ screenshotId: undefined })}
-          className="text-[11px] text-zinc-500 hover:text-red-600 mb-2"
-        >
-          Detach screenshot
-        </button>
-      )}
+          {Array.from({ length: panelCount }, (_, i) => (
+            <option key={i} value={i}>
+              {i + 1}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Popover
+        label={
+          <span className="inline-flex items-center gap-1">
+            Screenshot
+            {currentScreenshot ? (
+              <span
+                className="inline-block w-4 h-4 rounded-sm border border-zinc-400 bg-cover bg-center"
+                style={{
+                  backgroundImage: `url("/api/uploads/${currentScreenshot.path}")`,
+                }}
+              />
+            ) : null}
+            <Caret />
+          </span>
+        }
+        panelClassName="w-80"
+      >
+        {({ close }) => (
+          <div>
+            <div className="grid grid-cols-4 gap-1 mb-2">
+              {screenshots.map((s) => {
+                const isSel = s.id === element.screenshotId;
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => {
+                      onPatch({ screenshotId: s.id });
+                      close();
+                    }}
+                    className={`aspect-[1/2] rounded border bg-cover bg-center bg-zinc-50 dark:bg-zinc-800 ${
+                      isSel
+                        ? "border-blue-500 ring-2 ring-blue-500"
+                        : "border-zinc-300 dark:border-zinc-700 hover:border-zinc-400"
+                    }`}
+                    style={{ backgroundImage: `url("/api/uploads/${s.path}")` }}
+                    title={s.id}
+                  />
+                );
+              })}
+              <input
+                ref={uploadRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onUploadAndAttach(f);
+                  e.target.value = "";
+                }}
+              />
+              <button
+                onClick={() => uploadRef.current?.click()}
+                title="Upload + attach"
+                className="aspect-[1/2] rounded border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950 text-zinc-400 hover:text-blue-500 flex items-center justify-center text-lg"
+              >
+                +
+              </button>
+            </div>
+            {element.screenshotId && (
+              <button
+                onClick={() => onPatch({ screenshotId: undefined })}
+                className="text-[11px] text-zinc-500 hover:text-red-600"
+              >
+                Detach screenshot
+              </button>
+            )}
+          </div>
+        )}
+      </Popover>
+      <OverflowMenu onDelete={onDelete} onMove={onMove} />
+    </>
+  );
+}
 
-      <Label>Size (fraction of panel width)</Label>
-      <Slider
-        min={0.2}
-        max={1.5}
-        step={0.05}
-        value={element.size}
-        onChange={(v) => onPatch({ size: v })}
-      />
+// ============================================================================
+// Bar primitives
+// ============================================================================
 
-      <Label className="mt-2">Z-axis rotation (°)</Label>
-      <Slider
-        min={-90}
-        max={90}
-        value={Math.round(element.rotation)}
-        onChange={(v) => onPatch({ rotation: v })}
-      />
+function Badge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 px-1.5 py-0.5 rounded bg-zinc-200/60 dark:bg-zinc-800/60">
+      {children}
+    </span>
+  );
+}
 
-      <Label className="mt-2">Side tilt (Y axis)</Label>
-      <Slider
-        min={-30}
-        max={30}
-        value={Math.round(element.tiltY)}
-        onChange={(v) => onPatch({ tiltY: v })}
-      />
-
-      <Label className="mt-2">Top/bottom tilt (X axis)</Label>
-      <Slider
-        min={-30}
-        max={30}
-        value={Math.round(element.tiltX)}
-        onChange={(v) => onPatch({ tiltX: v })}
-      />
+function Field({
+  label,
+  width = "w-32",
+  children,
+}: {
+  label: string;
+  width?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={`flex flex-col gap-0.5 ${width}`}>
+      <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+        {label}
+      </span>
+      {children}
     </div>
   );
 }
+
+function CompactSlider({
+  min,
+  max,
+  step = 1,
+  value,
+  onChange,
+  decimals = 0,
+}: {
+  min: number;
+  max: number;
+  step?: number;
+  value: number;
+  onChange: (v: number) => void;
+  decimals?: number;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="flex-1 min-w-0"
+      />
+      <span className="text-[10px] tabular-nums w-10 text-right text-zinc-600 dark:text-zinc-400">
+        {decimals > 0 ? value.toFixed(decimals) : Math.round(value)}
+      </span>
+    </div>
+  );
+}
+
+function ToggleButton({
+  active,
+  onClick,
+  title,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`text-xs w-7 h-7 inline-flex items-center justify-center rounded border ${
+        active
+          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 border-zinc-900 dark:border-zinc-100"
+          : "border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function AlignGlyph({ align }: { align: "left" | "center" | "right" }) {
+  const bars =
+    align === "left"
+      ? ["w-3.5", "w-2.5", "w-3.5"]
+      : align === "center"
+      ? ["w-3.5", "w-2.5", "w-3.5"]
+      : ["w-3.5", "w-2.5", "w-3.5"];
+  const justify =
+    align === "left"
+      ? "items-start"
+      : align === "center"
+      ? "items-center"
+      : "items-end";
+  return (
+    <div className={`flex flex-col gap-0.5 ${justify}`}>
+      {bars.map((w, i) => (
+        <span key={i} className={`h-0.5 ${w} bg-current rounded`} />
+      ))}
+    </div>
+  );
+}
+
+function Caret() {
+  return <span className="text-[10px] text-zinc-500">▾</span>;
+}
+
+function OverflowMenu({
+  onDelete,
+  onMove,
+}: {
+  onDelete: () => void;
+  onMove: (direction: -1 | 1) => void;
+}) {
+  return (
+    <Popover label={<span aria-label="More">⋮</span>} align="right" panelClassName="w-44">
+      {({ close }) => (
+        <div className="flex flex-col text-xs">
+          <button
+            onClick={() => {
+              onMove(1);
+              close();
+            }}
+            className="text-left px-2 py-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            Bring forward ↑
+          </button>
+          <button
+            onClick={() => {
+              onMove(-1);
+              close();
+            }}
+            className="text-left px-2 py-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            Send back ↓
+          </button>
+          <button
+            onClick={() => {
+              onDelete();
+              close();
+            }}
+            className="text-left px-2 py-1.5 rounded hover:bg-red-50 dark:hover:bg-red-950 text-red-600"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+// ============================================================================
+// Misc UI helpers
+// ============================================================================
 
 function CustomIconGrid({
   customIcons,
@@ -1121,7 +1493,7 @@ function CustomIconGrid({
   );
 }
 
-function IconPicker({
+function IconAddPopover({
   onPick,
   customIcons,
   onUploadCustom,
@@ -1132,20 +1504,10 @@ function IconPicker({
   onUploadCustom: (file: File) => void | Promise<void>;
   onDeleteCustom: (iconId: string) => void | Promise<void>;
 }) {
-  const [open, setOpen] = useState(false);
   return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-      >
-        + Icon
-      </button>
-      {open && (
-        <div
-          className="absolute z-20 mt-1 left-0 w-64 p-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg space-y-2"
-          onMouseLeave={() => setOpen(false)}
-        >
+    <Popover label="+ Icon" panelClassName="w-64 space-y-2">
+      {({ close }) => (
+        <>
           <div className="text-[10px] uppercase tracking-wide text-zinc-500">
             Built-in
           </div>
@@ -1157,7 +1519,7 @@ function IconPicker({
                   key={key}
                   onClick={() => {
                     onPick(key);
-                    setOpen(false);
+                    close();
                   }}
                   title={key}
                   className="aspect-square rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-center"
@@ -1183,32 +1545,18 @@ function IconPicker({
             customIcons={customIcons}
             onPick={(value) => {
               onPick(value);
-              setOpen(false);
+              close();
             }}
             onUpload={onUploadCustom}
             onDelete={onDeleteCustom}
           />
-        </div>
+        </>
       )}
-    </div>
+    </Popover>
   );
 }
 
-// Suppress unused — used by default factories.
 void defaultTextElement;
-
-// ============================================================================
-// Small UI helpers (unchanged)
-// ============================================================================
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 bg-white dark:bg-zinc-900">
-      <h3 className="text-sm font-semibold mb-3">{title}</h3>
-      {children}
-    </div>
-  );
-}
 
 function Label({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
@@ -1249,14 +1597,10 @@ function ColorRow({
   value,
   onChange,
   palette,
-  allowClear,
-  onClear,
 }: {
   value: string;
   onChange: (v: string) => void;
   palette: string[];
-  allowClear?: boolean;
-  onClear?: () => void;
 }) {
   return (
     <div className="flex items-center gap-1.5 flex-wrap">
@@ -1277,14 +1621,6 @@ function ColorRow({
         onChange={(e) => onChange(e.target.value)}
         className="w-6 h-6 rounded border border-zinc-300 dark:border-zinc-700 cursor-pointer"
       />
-      {allowClear && onClear && (
-        <button
-          onClick={onClear}
-          className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 ml-1"
-        >
-          reset
-        </button>
-      )}
     </div>
   );
 }
