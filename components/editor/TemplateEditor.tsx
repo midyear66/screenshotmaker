@@ -338,7 +338,10 @@ export function TemplateEditor({
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       {/* ---- Canvas + top toolbar ---- */}
-      <div className="flex flex-col items-stretch">
+      {/* min-w-0: the canvas filmstrip can be much wider than the column;
+          without this the grid item grows to fit its content and the
+          horizontal scroll never engages. */}
+      <div className="flex flex-col items-stretch min-w-0">
         <div className="mb-4 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <button

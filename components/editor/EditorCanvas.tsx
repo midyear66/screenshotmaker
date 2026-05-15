@@ -76,6 +76,31 @@ function totalStageWidth(panelCount: number): number {
   return panelCount * PANEL_W + Math.max(0, panelCount - 1) * PANEL_GAP_PX;
 }
 
+/**
+ * Given a display-space X coordinate (stage coords, gap-shifted), return the
+ * index of the tile the X lands in. If X is inside a gap, returns the nearest
+ * tile by center distance. Used to reassign a device's `panelIndex` when the
+ * user drags it across the gutter into a neighbouring tile.
+ */
+function panelIdxFromDisplayX(displayX: number, panelCount: number): number {
+  for (let i = 0; i < panelCount; i++) {
+    const panelStart = i * (PANEL_W + PANEL_GAP_PX);
+    const panelEnd = panelStart + PANEL_W;
+    if (displayX >= panelStart && displayX <= panelEnd) return i;
+  }
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < panelCount; i++) {
+    const panelCenter = i * (PANEL_W + PANEL_GAP_PX) + PANEL_W / 2;
+    const dist = Math.abs(displayX - panelCenter);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
 type Props = {
   template: TemplateConfig;
   screenshots: ScreenshotAsset[];
@@ -143,8 +168,15 @@ export function EditorCanvas({
     return () => ro.disconnect();
   }, []);
 
-  const scale = displayWidth / canvasW;
-  const displayHeight = canvasH * scale;
+  // Filmstrip layout: derive scale from a fixed baseline ("how much canvas
+  // fits in the viewport") so panels stay the same readable size as the user
+  // adds more. Baseline = first 2 panels (or 1 panel if that's all there is).
+  // Anything beyond that overflows the wrapper and scrolls horizontally.
+  const baselineCanvasW =
+    panelCount === 1 ? PANEL_W : 2 * PANEL_W + PANEL_GAP_PX;
+  const scale = displayWidth / baselineCanvasW;
+  const stageDisplayW = canvasW * scale;
+  const stageDisplayH = canvasH * scale;
   const fallbackColor = template.backgroundColor;
 
   // Render the background as N per-panel slices using `gap: 0` so the
@@ -268,20 +300,23 @@ export function EditorCanvas({
     // Elements live inside a per-tile clip group offset by
     // `panelIdx * (PANEL_W + PANEL_GAP_PX)`. Add that back so `node.x()`
     // (which is group-local) converts to the same display-space coord
-    // `displayXToPanelX` expects. For devices the owning tile is fixed
-    // (`el.panelIndex`); for text/icons it's inferred from the pre-drag
-    // `pos.x`.
+    // `displayXToPanelX` expects. Devices may have been moved across the
+    // gutter during the transform, so we recompute their owning tile from
+    // display position; text/icons still infer their tile from `pos.x`.
     const panelIdx = panelIdxFor(el, panelCount);
     const groupX = panelIdx * (PANEL_W + PANEL_GAP_PX);
-    // Devices are tile-locked via `panelIndex`, so their `pos.x` is just
-    // a continuous coord relative to the tile's left edge — no need to
-    // snap out of the gap region. Other element types still infer their
-    // tile from `pos.x`, so they go through `displayXToPanelX`.
+    const displayX = node.x() + groupX;
+    const deviceNewPanelIdx =
+      el.type === "device"
+        ? panelIdxFromDisplayX(displayX, panelCount)
+        : panelIdx;
+    const deviceNewPanelOriginX =
+      deviceNewPanelIdx * (PANEL_W + PANEL_GAP_PX);
     const newPos = {
       x:
         el.type === "device"
-          ? panelIdx + node.x() / PANEL_W
-          : displayXToPanelX(node.x() + groupX, panelCount),
+          ? deviceNewPanelIdx + (displayX - deviceNewPanelOriginX) / PANEL_W
+          : displayXToPanelX(displayX, panelCount),
       y: node.y() / PANEL_H,
     };
     node.scaleX(1);
@@ -308,9 +343,9 @@ export function EditorCanvas({
         size: Math.max(0.05, el.size * factor),
         rotation,
         pos: newPos,
-        // Lock the device's tile so a transform near the edge doesn't
-        // re-partition it into an adjacent tile.
-        panelIndex: panelIdx,
+        // Reassign tile if the transform moved the device across the
+        // gutter; otherwise this is just the device's existing tile.
+        panelIndex: deviceNewPanelIdx,
       });
     } else {
       patchElement(id, {
@@ -393,13 +428,17 @@ export function EditorCanvas({
   return (
     <div
       ref={wrapperRef}
-      className={`relative w-full ${maxWidthClass} mx-auto`}
-      style={{ aspectRatio: `${canvasW} / ${canvasH}` }}
+      className={`relative w-full ${maxWidthClass} mx-auto overflow-x-auto overflow-y-hidden`}
+      style={{ height: stageDisplayH }}
     >
+      <div
+        className="relative"
+        style={{ width: stageDisplayW, height: stageDisplayH }}
+      >
       <Stage
         ref={stageRef}
-        width={displayWidth}
-        height={displayHeight}
+        width={stageDisplayW}
+        height={stageDisplayH}
         scaleX={scale}
         scaleY={scale}
         className="rounded-2xl overflow-hidden shadow-xl"
@@ -529,12 +568,11 @@ export function EditorCanvas({
                       panelCount={panelCount}
                       panelIdx={panelIdx}
                       onSelect={(id) => onSelectElement?.(id)}
-                      onMove={(id, pos) => {
-                        // Lock the device's tile to whichever group it's
-                        // currently rendered in. Prevents drag from
-                        // re-partitioning the device into a neighbouring
-                        // tile just because its centre crossed an edge.
-                        patchElement(id, { pos, panelIndex: panelIdx });
+                      onMove={(id, pos, newPanelIdx) => {
+                        // Reassign tile to wherever the user dropped the
+                        // device. Dragging across the gutter moves the
+                        // device into the neighbouring tile.
+                        patchElement(id, { pos, panelIndex: newPanelIdx });
                         setInteractingPanelIdx(null);
                       }}
                       onDragStart={() => setInteractingPanelIdx(panelIdx)}
@@ -671,6 +709,7 @@ export function EditorCanvas({
           }}
         />
       )}
+      </div>
     </div>
   );
 }
@@ -701,7 +740,11 @@ function DeviceNode({
   panelCount: number;
   panelIdx: number;
   onSelect: (id: string) => void;
-  onMove: (id: string, pos: { x: number; y: number }) => void;
+  onMove: (
+    id: string,
+    pos: { x: number; y: number },
+    newPanelIdx: number
+  ) => void;
   onDragStart?: () => void;
   onTransformStart: () => void;
   onTransformEnd: (e: Konva.KonvaEventObject<Event>) => void;
@@ -734,12 +777,21 @@ function DeviceNode({
       onDragStart={onDragStart}
       onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
         const node = e.target;
-        // Tile-locked: skip the gap-snap that displayXToPanelX applies
-        // for elements that infer their tile from pos.x.
-        onMove(el.id, {
-          x: panelIdx + node.x() / PANEL_W,
-          y: node.y() / PANEL_H,
-        });
+        // The device lives in this panel's clip group, so node.x() is
+        // group-local. Convert to display-space and figure out which tile
+        // the device's centre now sits over — that becomes the new
+        // panelIndex. Dragging across the gutter reassigns the device.
+        const displayX = panelIdx * (PANEL_W + PANEL_GAP_PX) + node.x();
+        const newPanelIdx = panelIdxFromDisplayX(displayX, panelCount);
+        const newPanelOriginX = newPanelIdx * (PANEL_W + PANEL_GAP_PX);
+        onMove(
+          el.id,
+          {
+            x: newPanelIdx + (displayX - newPanelOriginX) / PANEL_W,
+            y: node.y() / PANEL_H,
+          },
+          newPanelIdx
+        );
       }}
       onTransformStart={onTransformStart}
       onTransformEnd={onTransformEnd}
